@@ -15,7 +15,7 @@ def test_capture_sequence():
     for view_index in range(9):
 
         cam = Camera(
-            get_test_dir(
+            device_id=get_test_dir(
                 f"MariMapper-Test-Data/9_point_box/cam_{view_index}/capture_%04d.png"
             )
         )

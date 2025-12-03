@@ -88,6 +88,7 @@ class DetectorProcess(Process):
         backend_factory: partial,
         display: bool = True,
         check_movement=True,
+        axis_config: dict = None,
     ):
         super().__init__()
         self._request_detections_queue = RequestDetectionsQueue()  # {led_id, view_id}
@@ -103,6 +104,7 @@ class DetectorProcess(Process):
         self._led_backend_factory = backend_factory
         self._display = display
         self._check_movement = check_movement
+        self._axis_config = axis_config
 
     def get_input_3d_info_queue(self):
         return self._input_3d_info_queue
@@ -132,7 +134,7 @@ class DetectorProcess(Process):
 
         self._led_count.put(led_backend.get_led_count())
 
-        cam = Camera(self._device)
+        cam = Camera(device_id=self._device, axis_config=self._axis_config)
 
         timeout_controller = TimeoutController()
 

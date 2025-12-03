@@ -20,6 +20,27 @@ def add_camera_args(parser):
     )
 
     camera_options.add_argument(
+        "--axis-host",
+        type=str,
+        help="Axis camera IP address or hostname (e.g., 192.168.1.100). If specified, uses Axis camera instead of USB webcam",
+        default=None,
+    )
+
+    camera_options.add_argument(
+        "--axis-username",
+        type=str,
+        help="Username for Axis camera authentication",
+        default="root",
+    )
+
+    camera_options.add_argument(
+        "--axis-password",
+        type=str,
+        help="Password for Axis camera authentication",
+        default="",
+    )
+
+    camera_options.add_argument(
         "--exposure",
         type=int,
         help="Camera exposure, the lower the value, the darker the image",

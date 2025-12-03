@@ -29,7 +29,18 @@ def main():
 
     parse_common_args(args, logger)
 
-    cam = Camera(args.device)
+    # Build axis_config if axis-host is specified
+    axis_config = None
+    if args.axis_host:
+        if not args.axis_password:
+            raise Exception("--axis-password is required when using --axis-host")
+        axis_config = {
+            'host': args.axis_host,
+            'username': args.axis_username,
+            'password': args.axis_password,
+        }
+
+    cam = Camera(device_id=args.device, axis_config=axis_config)
 
     set_cam_dark(cam, args.exposure)
 

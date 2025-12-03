@@ -47,6 +47,17 @@ def main():
 
     backend_factory = backend_factories[args.backend](args)
 
+    # Build axis_config if axis-host is specified
+    axis_config = None
+    if args.axis_host:
+        if not args.axis_password:
+            raise Exception("--axis-password is required when using --axis-host")
+        axis_config = {
+            'host': args.axis_host,
+            'username': args.axis_username,
+            'password': args.axis_password,
+        }
+
     scanner = Scanner(
         args.dir,
         args.device,
@@ -59,6 +70,7 @@ def main():
         args.interpolation_max_error if args.interpolation_max_error != -1 else 10000,
         args.disable_movement_check,
         args.camera_model,
+        axis_config,
     )
 
     scanner.mainloop()

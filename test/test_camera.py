@@ -6,7 +6,7 @@ from utils import get_test_dir
 def test_valid_device():
 
     cam = Camera(
-        get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
+        device_id=get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
     )
 
     image = cam.read()

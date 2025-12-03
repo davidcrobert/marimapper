@@ -8,7 +8,7 @@ from utils import get_test_dir
 def test_basic_image_loading():
 
     mock_camera = Camera(
-        get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_0000.png")
+        device_id=get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_0000.png")
     )
 
     detection = find_led_in_image(mock_camera.read())
@@ -19,7 +19,7 @@ def test_basic_image_loading():
 def test_none_found():
 
     mock_camera = Camera(
-        get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
+        device_id=get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
     )
 
     for frame_id in range(24):
@@ -32,7 +32,7 @@ def test_none_found():
 def test_draw_results():
 
     mock_camera = Camera(
-        get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
+        device_id=get_test_dir("MariMapper-Test-Data/9_point_box/cam_0/capture_%04d.png")
     )
     frame = mock_camera.read()
     led_detection = find_led_in_image(frame)

@@ -22,25 +22,55 @@ class CameraSettings:
 
 class Camera:
 
-    def __init__(self, device_id):
-        logger.info(f"Connecting to device {device_id} ...")
-        self.device_id = device_id
+    def __init__(self, device_id=None, axis_config=None):
+        """
+        Initialize camera with either a device_id (for USB/webcam) or axis_config (for Axis IP camera).
 
-        for capture_method in [cv2.CAP_DSHOW, cv2.CAP_V4L2, cv2.CAP_ANY]:
-            self.device = cv2.VideoCapture(device_id, capture_method)
-            if self.device.isOpened():
-                logger.debug(
-                    f"Connected to device {device_id} with capture method {capture_method}"
-                )
-                break
+        Args:
+            device_id: Integer device ID for USB/webcam (e.g., 0, 1)
+            axis_config: Dict with keys 'host', 'username', 'password' for Axis IP camera
+        """
+        if axis_config is not None:
+            # Axis IP camera mode
+            self.is_axis_camera = True
+            self.device_id = None
+            host = axis_config['host']
+            username = axis_config['username']
+            password = axis_config['password']
+            stream_url = f"http://{username}:{password}@{host}/axis-cgi/mjpg/video.cgi"
 
-        if not self.device.isOpened():
-            raise RuntimeError(f"Failed to connect to camera {device_id}")
+            logger.info(f"Connecting to Axis camera at {host} ...")
+            self.device = cv2.VideoCapture(stream_url)
 
-        self.default_settings = CameraSettings(self)
+            if not self.device.isOpened():
+                raise RuntimeError(f"Failed to connect to Axis camera at {host}")
+
+            logger.info(f"Successfully connected to Axis camera at {host}")
+
+            # Axis cameras don't support property changes via OpenCV, so skip default settings
+            self.default_settings = None
+        else:
+            # USB/webcam mode
+            self.is_axis_camera = False
+            logger.info(f"Connecting to device {device_id} ...")
+            self.device_id = device_id
+
+            for capture_method in [cv2.CAP_DSHOW, cv2.CAP_V4L2, cv2.CAP_ANY]:
+                self.device = cv2.VideoCapture(device_id, capture_method)
+                if self.device.isOpened():
+                    logger.debug(
+                        f"Connected to device {device_id} with capture method {capture_method}"
+                    )
+                    break
+
+            if not self.device.isOpened():
+                raise RuntimeError(f"Failed to connect to camera {device_id}")
+
+            self.default_settings = CameraSettings(self)
 
     def reset(self):
-        self.default_settings.apply(self)
+        if self.default_settings is not None:
+            self.default_settings.apply(self)
 
     def get_af_mode(self):
         return int(self.device.get(cv2.CAP_PROP_AUTOFOCUS))
@@ -58,6 +88,9 @@ class Camera:
         return int(self.device.get(cv2.CAP_PROP_GAIN))
 
     def set_autofocus(self, mode, focus=0):
+        if self.is_axis_camera:
+            logger.debug("Skipping autofocus setting for Axis camera")
+            return
 
         logger.debug(f"Setting autofocus to mode {mode} with focus {focus}")
 
@@ -68,6 +101,9 @@ class Camera:
             logger.info(f"Failed to set focus to {focus}")
 
     def set_exposure_mode(self, mode):
+        if self.is_axis_camera:
+            logger.debug("Skipping exposure mode setting for Axis camera")
+            return
 
         logger.debug(f"Setting exposure to mode {mode}")
 
@@ -75,6 +111,9 @@ class Camera:
             logger.info(f"Failed to put camera into manual exposure mode {mode}")
 
     def set_gain(self, gain):
+        if self.is_axis_camera:
+            logger.debug("Skipping gain setting for Axis camera")
+            return
 
         logger.debug(f"Setting gain to {gain}")
 
@@ -82,6 +121,9 @@ class Camera:
             logger.info(f"failed to set camera gain to {gain}")
 
     def set_exposure(self, exposure: int) -> bool:
+        if self.is_axis_camera:
+            logger.debug("Skipping exposure setting for Axis camera")
+            return True
 
         logger.debug(f"Setting exposure to {exposure}")
 

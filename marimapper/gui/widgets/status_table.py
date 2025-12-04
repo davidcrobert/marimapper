@@ -6,12 +6,15 @@ Displays the reconstruction status of each LED with color-coded rows.
 
 import math
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
-from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QColor
 
 
 class StatusTable(QWidget):
     """Widget displaying LED reconstruction status in a table."""
+
+    # Signals
+    led_toggle_requested = pyqtSignal(int, bool)  # (led_id, turn_on)
 
     # Color scheme for LED states
     COLORS = {
@@ -39,6 +42,7 @@ class StatusTable(QWidget):
         self.sorted_ids: list[int] = []
         self.manual_on_leds: set[int] = set()
         self.pairs_per_row = 10  # Each LED occupies two columns (ID + status)
+        self.columns_configured = False  # Track if columns have been set up
         self.init_ui()
 
     def init_ui(self):
@@ -92,7 +96,11 @@ class StatusTable(QWidget):
         font = self.table.font()
         font.setPointSize(max(font.pointSize() - 4, 6))
         self.table.setFont(font)
-        self.table.cellClicked.connect(self._on_cell_clicked)
+
+        # Only connect signal once
+        if not self.columns_configured:
+            self.table.cellClicked.connect(self._on_cell_clicked)
+            self.columns_configured = True
 
     def _status_name(self, led_info) -> str:
         """Return the status name string for a LEDInfo-like object."""
@@ -120,8 +128,9 @@ class StatusTable(QWidget):
         self.led_data = led_info_dict
         self.sorted_ids = sorted(led_info_dict.keys())
 
-        # Reconfigure columns in case settings changed
-        self._configure_columns()
+        # Only configure columns if not already done
+        if not self.columns_configured:
+            self._configure_columns()
 
         # Update table row count (chunk LEDs across multiple columns)
         led_count = len(led_info_dict)
@@ -133,24 +142,24 @@ class StatusTable(QWidget):
             row = idx // self.pairs_per_row
             col_base = (idx % self.pairs_per_row) * 2
 
-            # LED ID
+            status_name = self._status_name(led_info)
+            status_color = self.COLORS.get(status_name, self.COLORS["NONE"])
+
+            # LED ID - default gray unless toggled on (dark blue)
             id_item = QTableWidgetItem(str(led_id))
             id_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if led_id in self.manual_on_leds:
+                id_item.setBackground(QColor(40, 70, 140))  # Dark blue when toggled
+            else:
+                id_item.setBackground(QColor(240, 240, 240))  # Default gray
             self.table.setItem(row, col_base, id_item)
 
-            # Status (led_info is an LEDInfo enum)
-            status_name = self._status_name(led_info)
+            # Status - always shows status color (never changes to dark blue)
             status_text = self._abbreviation(status_name)
             status_item = QTableWidgetItem(status_text)
             status_item.setToolTip(status_name.title())  # Full name on hover
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Set background color based on status or manual toggle
-            if led_id in self.manual_on_leds:
-                color = QColor(40, 70, 140)  # dark blue to indicate manual ON
-            else:
-                color = self.COLORS.get(status_name, self.COLORS["NONE"])
-            status_item.setBackground(color)
+            status_item.setBackground(status_color)  # Always status color
 
             self.table.setItem(row, col_base + 1, status_item)
 
@@ -192,6 +201,41 @@ class StatusTable(QWidget):
         for led_id in self.sorted_ids:
             yield led_id, self.led_data[led_id]
 
+    @pyqtSlot()
+    def set_all_on_state(self):
+        """Set all LEDs to 'on' state (dark blue ID cells). Visual update only, no signals."""
+        print("StatusTable: Setting all LEDs ON (visual state)")
+        # Add all LEDs to manual_on_leds set
+        for led_id in self.sorted_ids:
+            self.manual_on_leds.add(led_id)
+
+        # Update all ID cells to dark blue
+        self._update_all_id_cells()
+
+    @pyqtSlot()
+    def set_all_off_state(self):
+        """Set all LEDs to 'off' state (gray ID cells). Visual update only, no signals."""
+        print("StatusTable: Setting all LEDs OFF (visual state)")
+        # Clear the manual_on_leds set
+        self.manual_on_leds.clear()
+
+        # Update all ID cells to gray
+        self._update_all_id_cells()
+
+    def _update_all_id_cells(self):
+        """Update all ID cell colors based on manual_on_leds state."""
+        for idx, led_id in enumerate(self.sorted_ids):
+            row = idx // self.pairs_per_row
+            col_base = (idx % self.pairs_per_row) * 2
+            id_column = col_base
+
+            id_item = self.table.item(row, id_column)
+            if id_item is not None:
+                if led_id in self.manual_on_leds:
+                    id_item.setBackground(QColor(40, 70, 140))  # Dark blue
+                else:
+                    id_item.setBackground(QColor(240, 240, 240))  # Gray
+
     def _on_cell_clicked(self, row: int, column: int):
         """Toggle LED on/off when either ID or status cell is clicked."""
         pair_index = column // 2
@@ -204,15 +248,24 @@ class StatusTable(QWidget):
 
         if turn_on:
             self.manual_on_leds.add(led_id)
+            print(f"StatusTable: LED {led_id} toggled ON (ID cell -> dark blue)")
         else:
             self.manual_on_leds.discard(led_id)
+            print(f"StatusTable: LED {led_id} toggled OFF (ID cell -> default gray)")
 
-        # Update cell color
-        status_column = pair_index * 2 + 1
-        item = self.table.item(row, status_column)
-        if item is not None:
-            status_name = self._status_name(self.led_data.get(led_id, "NONE"))
+        # Update only the ID cell color
+        id_column = pair_index * 2
+        id_item = self.table.item(row, id_column)
+
+        if id_item is not None:
             if turn_on:
-                item.setBackground(QColor(40, 70, 140))
+                # ID cell goes dark blue when toggled on
+                id_item.setBackground(QColor(40, 70, 140))
             else:
-                item.setBackground(self.COLORS.get(status_name, self.COLORS["NONE"]))
+                # ID cell returns to default gray
+                id_item.setBackground(QColor(240, 240, 240))
+
+        # Status cell keeps its color - no changes needed
+
+        # Emit signal to actually control the LED
+        self.led_toggle_requested.emit(led_id, turn_on)

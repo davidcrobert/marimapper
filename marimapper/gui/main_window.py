@@ -190,6 +190,13 @@ class MainWindow(QMainWindow):
         self.control_panel.all_off_requested.connect(self.set_all_off)
         self.control_panel.all_on_requested.connect(self.set_all_on)
 
+        # Connect status table signals
+        self.status_table.led_toggle_requested.connect(self.set_individual_led)
+
+        # Connect control panel to status table for visual state updates
+        self.control_panel.all_off_requested.connect(self.status_table.set_all_off_state)
+        self.control_panel.all_on_requested.connect(self.status_table.set_all_on_state)
+
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
         self.signals.log_message.connect(self.log_widget.add_message)
@@ -360,6 +367,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("LEDs: All off")
         except Exception as e:
             self.log_widget.log_error(f"Failed to turn LEDs off: {str(e)}")
+
+    @pyqtSlot(int, bool)
+    def set_individual_led(self, led_id: int, turn_on: bool):
+        """Turn on or off an individual LED."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put((CameraCommand.SET_LED, (led_id, turn_on)))
+            status = "ON" if turn_on else "OFF"
+            self.log_widget.log_info(f"LED {led_id} turned {status}")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to control LED {led_id}: {str(e)}")
 
     @pyqtSlot()
     def set_all_on(self):

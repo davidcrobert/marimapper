@@ -168,6 +168,8 @@ class MainWindow(QMainWindow):
         # Connect control panel signals
         self.control_panel.start_scan_requested.connect(self.start_scan)
         self.control_panel.stop_scan_requested.connect(self.stop_scan)
+        self.control_panel.exposure_dark_requested.connect(self.set_exposure_dark)
+        self.control_panel.exposure_bright_requested.connect(self.set_exposure_bright)
 
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
@@ -264,6 +266,38 @@ class MainWindow(QMainWindow):
         # requires additional scanner modifications
         self.log_widget.log_warning("Stop requested (scan will complete current LED)")
         self.statusBar().showMessage("Stop requested...")
+
+    @pyqtSlot()
+    def set_exposure_dark(self):
+        """Set camera to dark mode (low exposure for LED detection)."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put(CameraCommand.SET_DARK)
+            self.log_widget.log_info("Camera set to DARK mode")
+            self.statusBar().showMessage("Camera: Dark mode")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to set dark mode: {str(e)}")
+
+    @pyqtSlot()
+    def set_exposure_bright(self):
+        """Set camera to bright mode (normal exposure)."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put(CameraCommand.SET_BRIGHT)
+            self.log_widget.log_info("Camera set to BRIGHT mode")
+            self.statusBar().showMessage("Camera: Bright mode")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to set bright mode: {str(e)}")
 
     @pyqtSlot(int)
     def on_scan_completed(self, view_id: int):

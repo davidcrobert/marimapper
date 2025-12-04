@@ -145,6 +145,10 @@ class Scanner:
         """Return the detector update queue for GUI monitoring."""
         return self.detector_update_queue
 
+    def get_camera_command_queue(self):
+        """Return the camera command queue for sending commands to detector."""
+        return self.detector.get_camera_command_queue()
+
     def close(self):
         logger.debug("scanner closing")
 

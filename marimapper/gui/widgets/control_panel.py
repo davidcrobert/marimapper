@@ -22,6 +22,8 @@ class ControlPanel(QWidget):
     # Signals
     start_scan_requested = pyqtSignal(int, int)  # led_from, led_to
     stop_scan_requested = pyqtSignal()
+    exposure_dark_requested = pyqtSignal()  # Set camera to dark mode
+    exposure_bright_requested = pyqtSignal()  # Set camera to bright mode
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -73,6 +75,31 @@ class ControlPanel(QWidget):
 
         view_info_group.setLayout(view_info_layout)
         layout.addWidget(view_info_group)
+
+        # Camera Controls
+        camera_controls_group = QGroupBox("Camera Controls")
+        camera_controls_layout = QVBoxLayout()
+
+        # Exposure toggle buttons
+        exposure_layout = QHBoxLayout()
+
+        self.dark_button = QPushButton("Dark Mode")
+        self.dark_button.setToolTip("Close iris / Lower exposure for LED detection")
+        self.dark_button.clicked.connect(self.on_exposure_dark)
+        exposure_layout.addWidget(self.dark_button)
+
+        self.bright_button = QPushButton("Bright Mode")
+        self.bright_button.setToolTip("Open iris / Normal exposure for preview")
+        self.bright_button.clicked.connect(self.on_exposure_bright)
+        exposure_layout.addWidget(self.bright_button)
+
+        camera_controls_layout.addLayout(exposure_layout)
+
+        self.exposure_status_label = QLabel("Mode: Normal")
+        camera_controls_layout.addWidget(self.exposure_status_label)
+
+        camera_controls_group.setLayout(camera_controls_layout)
+        layout.addWidget(camera_controls_group)
 
         # Scan Controls
         scan_controls_group = QGroupBox("Scan Controls")
@@ -151,3 +178,13 @@ class ControlPanel(QWidget):
         """Reset the view counter."""
         self.view_count = 0
         self.view_count_label.setText(f"Views captured: {self.view_count}")
+
+    def on_exposure_dark(self):
+        """Handle dark mode button click."""
+        self.exposure_status_label.setText("Mode: Dark (LED Detection)")
+        self.exposure_dark_requested.emit()
+
+    def on_exposure_bright(self):
+        """Handle bright mode button click."""
+        self.exposure_status_label.setText("Mode: Bright (Normal)")
+        self.exposure_bright_requested.emit()

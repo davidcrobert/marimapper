@@ -106,6 +106,8 @@ class DetectorProcess(Process):
         self._led_count: Queue = Queue()
         self._led_count.cancel_join_thread()
         self._input_3d_info_queue = Queue3DInfo()
+        self._camera_command_queue: Queue = Queue()  # Camera control commands
+        self._camera_command_queue.cancel_join_thread()
         self._exit_event = Event()
 
         self._device = device
@@ -119,6 +121,9 @@ class DetectorProcess(Process):
 
     def get_input_3d_info_queue(self):
         return self._input_3d_info_queue
+
+    def get_camera_command_queue(self):
+        return self._camera_command_queue
 
     def get_request_detections_queue(self) -> RequestDetectionsQueue:
         return self._request_detections_queue
@@ -291,6 +296,21 @@ class DetectorProcess(Process):
                         logger.debug(
                             "failed to update colourful backend buffer due to a missing attribute"
                         )
+
+                # Handle camera control commands
+                if not self._camera_command_queue.empty():
+                    try:
+                        command = self._camera_command_queue.get_nowait()
+                        if command == CameraCommand.SET_DARK:
+                            logger.info("GUI requested: Setting camera to DARK mode")
+                            set_cam_dark(cam, self._dark_exposure)
+                            cam.eat()  # Flush frames
+                        elif command == CameraCommand.SET_BRIGHT:
+                            logger.info("GUI requested: Setting camera to BRIGHT mode")
+                            set_cam_default(cam)
+                            cam.eat()  # Flush frames
+                    except Exception as e:
+                        logger.warning(f"Failed to process camera command: {e}")
 
         logger.info("detector closing, resetting camera and backend")
         try:

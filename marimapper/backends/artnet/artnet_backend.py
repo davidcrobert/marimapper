@@ -137,13 +137,68 @@ class Backend:
         # Send an ArtSync packet for good measure, although I'm not sure many devices actually use it.
         self.send_packet(self.get_artsync_packet())
 
+    def set_leds(self, updates) -> bool:
+        """
+        Bulk update LEDs. Accepts either:
+        - Iterable of (index, value) tuples, where value can be bool/int or an RGB-like iterable.
+        - Iterable of per-LED values (same length as LED count), used for compatibility with existing calls.
+        """
+        led_count = self.get_led_count()
+        universe_count = (led_count * self.channels_per_fixture + 511) // 512
+        channels = [0] * (512 * universe_count)
+
+        def level_from(val):
+            if isinstance(val, (list, tuple)):
+                if len(val) == 0:
+                    return 0
+                try:
+                    # Use the max channel value from RGB-like input
+                    return max(0, min(255, int(max(val))))
+                except Exception:
+                    return 255 if bool(val) else 0
+            if isinstance(val, bool):
+                return 255 if val else 0
+            try:
+                return max(0, min(255, int(val)))
+            except Exception:
+                return 255 if bool(val) else 0
+
+        # Determine format: tuple updates vs per-index list
+        if updates and isinstance(updates[0], tuple) and len(updates[0]) == 2:
+            iterable = updates
+        else:
+            iterable = enumerate(updates)
+
+        for idx, val in iterable:
+            if idx < 0 or idx >= led_count:
+                continue
+            level = level_from(val)
+            base = idx * self.channels_per_fixture
+            for c in range(self.channels_per_fixture):
+                channels[base + c] = level
+
+        universes = [channels[u * 512 : (u + 1) * 512] for u in range(universe_count)]
+
+        # Mirror the multi-frame approach used in set_led to ensure devices latch
+        for _ in range(0, 5):
+            for u in range(universe_count):
+                self.send_universe(u, universes[u])
+            sleep(0.05)
+
+        self.send_packet(self.get_artsync_packet())
+        return True
+
     def blackout(self) -> bool:
-        """Turn off all fixtures in a single pass."""
+        """Turn off all fixtures; send a few frames so controllers latch."""
         universe_count = (self.get_led_count() * self.channels_per_fixture + 511) // 512
         channels = [0] * (512 * universe_count)
         universes = [channels[u * 512 : (u + 1) * 512] for u in range(universe_count)]
 
-        for u in range(universe_count):
-            self.send_universe(u, universes[u])
+        # Many Art-Net devices need multiple frames before updating; mirror set_led behaviour.
+        for _ in range(0, 5):
+            for u in range(universe_count):
+                self.send_universe(u, universes[u])
+            sleep(0.02)
+
         self.send_packet(self.get_artsync_packet())
         return True

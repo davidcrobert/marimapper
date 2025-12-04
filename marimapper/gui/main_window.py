@@ -187,6 +187,8 @@ class MainWindow(QMainWindow):
         self.control_panel.exposure_dark_requested.connect(self.set_exposure_dark)
         self.control_panel.exposure_bright_requested.connect(self.set_exposure_bright)
         self.control_panel.threshold_changed.connect(self.set_threshold)
+        self.control_panel.all_off_requested.connect(self.set_all_off)
+        self.control_panel.all_on_requested.connect(self.set_all_on)
 
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
@@ -342,6 +344,38 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Threshold: {value}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set threshold: {str(e)}")
+
+    @pyqtSlot()
+    def set_all_off(self):
+        """Turn off all LEDs/pixels."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put(CameraCommand.ALL_OFF)
+            self.log_widget.log_info("All LEDs off")
+            self.statusBar().showMessage("LEDs: All off")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to turn LEDs off: {str(e)}")
+
+    @pyqtSlot()
+    def set_all_on(self):
+        """Turn on all LEDs/pixels."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put(CameraCommand.ALL_ON)
+            self.log_widget.log_info("All LEDs on")
+            self.statusBar().showMessage("LEDs: All on")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to turn LEDs on: {str(e)}")
 
     @pyqtSlot(int)
     def on_scan_completed(self, view_id: int):

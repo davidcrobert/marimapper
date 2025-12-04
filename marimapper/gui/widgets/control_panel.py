@@ -26,6 +26,8 @@ class ControlPanel(QWidget):
     exposure_dark_requested = pyqtSignal()  # Set camera to dark mode
     exposure_bright_requested = pyqtSignal()  # Set camera to bright mode
     threshold_changed = pyqtSignal(int)  # New threshold value (0-255)
+    all_off_requested = pyqtSignal()  # Turn all LEDs off
+    all_on_requested = pyqtSignal()   # Turn all LEDs on
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -96,6 +98,20 @@ class ControlPanel(QWidget):
         exposure_layout.addWidget(self.bright_button)
 
         camera_controls_layout.addLayout(exposure_layout)
+
+        # Global LED controls
+        led_power_layout = QHBoxLayout()
+        self.all_off_button = QPushButton("All Off")
+        self.all_off_button.setToolTip("Turn off all LEDs/pixels")
+        self.all_off_button.clicked.connect(self.on_all_off)
+        led_power_layout.addWidget(self.all_off_button)
+
+        self.all_on_button = QPushButton("All On")
+        self.all_on_button.setToolTip("Turn on all LEDs/pixels")
+        self.all_on_button.clicked.connect(self.on_all_on)
+        led_power_layout.addWidget(self.all_on_button)
+
+        camera_controls_layout.addLayout(led_power_layout)
 
         self.exposure_status_label = QLabel("Mode: Normal")
         camera_controls_layout.addWidget(self.exposure_status_label)
@@ -217,3 +233,11 @@ class ControlPanel(QWidget):
         """Handle threshold slider change."""
         self.threshold_value_label.setText(str(value))
         self.threshold_changed.emit(value)
+
+    def on_all_off(self):
+        """Handle All Off button click."""
+        self.all_off_requested.emit()
+
+    def on_all_on(self):
+        """Handle All On button click."""
+        self.all_on_requested.emit()

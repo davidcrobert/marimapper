@@ -27,6 +27,8 @@ class CameraCommand(Enum):
     SET_DARK = "set_dark"
     SET_BRIGHT = "set_bright"
     SET_THRESHOLD = "set_threshold"  # (command, threshold_value)
+    ALL_OFF = "all_off"
+    ALL_ON = "all_on"
 
 
 def backend_black(backend):
@@ -49,6 +51,26 @@ def backend_black(backend):
 
     except Exception as e:
         logger.debug(f"Failed to blacken backend: {e}")
+
+    return False
+
+
+def backend_all_on(backend):
+    """Turn every LED/pixel fully on using available backend APIs."""
+    try:
+        # Preferred bulk interface
+        if hasattr(backend, "set_leds"):
+            buffer = [[255, 255, 255] for _ in range(backend.get_led_count())]
+            backend.set_leds(buffer)
+            return True
+
+        # Fallback: per-LED iteration
+        if hasattr(backend, "set_led"):
+            for i in range(backend.get_led_count()):
+                backend.set_led(i, True)
+            return True
+    except Exception as e:
+        logger.debug(f"Failed to turn all LEDs on: {e}")
 
     return False
 
@@ -337,6 +359,12 @@ class DetectorProcess(Process):
                             if value is not None:
                                 logger.info(f"GUI requested: Setting threshold to {value}")
                                 self._threshold = value
+                        elif command == CameraCommand.ALL_OFF:
+                            logger.info("GUI requested: Turning all LEDs off")
+                            backend_black(led_backend)
+                        elif command == CameraCommand.ALL_ON:
+                            logger.info("GUI requested: Turning all LEDs on")
+                            backend_all_on(led_backend)
                     except Exception as e:
                         logger.warning(f"Failed to process camera command: {e}")
 

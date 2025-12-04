@@ -29,6 +29,8 @@ class CameraCommand(Enum):
     SET_THRESHOLD = "set_threshold"  # (command, threshold_value)
     ALL_OFF = "all_off"
     ALL_ON = "all_on"
+    SET_LED = "set_led"  # (command, (led_id, on_bool))
+    SET_LEDS_BULK = "set_leds_bulk"  # (command, [(led_id, on_bool), ...])
 
 
 def backend_black(backend):
@@ -217,6 +219,9 @@ class DetectorProcess(Process):
 
         frame_send_count = 0
         idle_loop_count = 0
+        # Buffer to track manual LED state from GUI (for maintaining multiple LEDs on)
+        manual_led_state = {}  # {led_id: bool}
+
         while not self._exit_event.is_set():
 
             if not self._request_detections_queue.empty():
@@ -362,9 +367,53 @@ class DetectorProcess(Process):
                         elif command == CameraCommand.ALL_OFF:
                             logger.info("GUI requested: Turning all LEDs off")
                             backend_black(led_backend)
+                            manual_led_state.clear()  # Clear the state buffer
                         elif command == CameraCommand.ALL_ON:
                             logger.info("GUI requested: Turning all LEDs on")
                             backend_all_on(led_backend)
+                            # Update state buffer to reflect all LEDs on
+                            for i in range(led_count):
+                                manual_led_state[i] = True
+                        elif command == CameraCommand.SET_LED:
+                            if value is not None and isinstance(value, tuple) and len(value) == 2:
+                                led_id, on_state = value
+                                logger.info(f"GUI requested: Setting LED {led_id} to {'ON' if on_state else 'OFF'}")
+
+                                # Update the state buffer
+                                if on_state:
+                                    manual_led_state[led_id] = True
+                                else:
+                                    manual_led_state.pop(led_id, None)
+
+                                # Use set_leds if available (maintains other LED states)
+                                if hasattr(led_backend, 'set_leds'):
+                                    # Build list of (led_id, on_state) tuples from buffer
+                                    updates = [(lid, True) for lid in manual_led_state.keys()]
+                                    led_backend.set_leds(updates)
+                                # Fallback to set_led (will turn off other LEDs)
+                                elif hasattr(led_backend, 'set_led'):
+                                    led_backend.set_led(led_id, on_state)
+                        elif command == CameraCommand.SET_LEDS_BULK:
+                            if value is not None and isinstance(value, list):
+                                logger.info(f"GUI requested: Bulk setting {len(value)} LEDs")
+
+                                # Update the state buffer with all changes
+                                for led_id, on_state in value:
+                                    if on_state:
+                                        manual_led_state[led_id] = True
+                                    else:
+                                        manual_led_state.pop(led_id, None)
+
+                                # Use set_leds if available (maintains other LED states)
+                                if hasattr(led_backend, 'set_leds'):
+                                    # Build list of (led_id, on_state) tuples from buffer
+                                    updates = [(lid, True) for lid in manual_led_state.keys()]
+                                    led_backend.set_leds(updates)
+                                    logger.info(f"Bulk LED update complete: {len(manual_led_state)} LEDs now on")
+                                # Fallback to set_led (will turn off other LEDs) - iterate one by one
+                                elif hasattr(led_backend, 'set_led'):
+                                    for led_id, on_state in value:
+                                        led_backend.set_led(led_id, on_state)
                     except Exception as e:
                         logger.warning(f"Failed to process camera command: {e}")
 

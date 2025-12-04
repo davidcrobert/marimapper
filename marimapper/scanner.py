@@ -5,6 +5,8 @@ from marimapper.sfm_process import SFM
 from tqdm import tqdm
 from pathlib import Path
 from marimapper.detector_process import DetectorProcess
+from marimapper.coordinator_process import CoordinatorProcess
+from marimapper.detector_worker_process import DetectorWorkerProcess
 from marimapper.queues import Queue2D, Queue3DInfo, DetectionControlEnum
 from multiprocessing import get_logger, set_start_method, get_start_method
 from marimapper.file_tools import get_all_2d_led_maps
@@ -13,6 +15,7 @@ from marimapper.visualize_process import VisualiseProcess
 from marimapper.led import last_view
 from marimapper.file_writer_process import FileWriterProcess
 from functools import partial
+from typing import Optional, List
 
 # This is to do with an issue with open3d bug in estimate normals
 # https://github.com/isl-org/Open3D/issues/1428
@@ -65,31 +68,41 @@ class Scanner:
         interpolation_max_error: float,
         check_movement: bool,
         camera_model_name: str,
-        axis_config: dict = None,
+        axis_config: Optional[dict] = None,
+        axis_configs: Optional[List[dict]] = None,
         frame_queue=None,
     ):
+        """
+        Initialize Scanner for single or multi-camera mode.
+
+        Args:
+            axis_config: Single camera config (for backwards compatibility)
+            axis_configs: Multiple camera configs (for multi-camera mode)
+                         If provided with len > 1, enables multi-camera mode
+        """
         logger.debug("initialising scanner")
         # VERY important, see top of file
         # Only set if not already set (GUI may have already set it)
         if get_start_method(allow_none=True) != "spawn":
             set_start_method("spawn")
+
+        # Store common parameters
         self.output_dir = output_dir
+        self.device = device
+        self.exposure = exposure
+        self.threshold = threshold
+        self.backend_factory = backend_factory
+        self.led_start = led_start
+        self.led_end = led_end
+        self.check_movement = check_movement
+        self.frame_queue = frame_queue
 
-        self.detector = DetectorProcess(
-            device=device,
-            dark_exposure=exposure,
-            threshold=threshold,
-            backend_factory=backend_factory,
-            display=True,
-            check_movement=check_movement,
-            axis_config=axis_config,
-            frame_queue=frame_queue,
-        )
+        # Determine mode: multi-camera or single-camera
+        self.multi_camera_mode = axis_configs is not None and len(axis_configs) > 1
 
+        # Initialize common components
         self.file_writer = FileWriterProcess(self.output_dir)
-
         existing_leds = get_all_2d_led_maps(self.output_dir)
-
         led_count = led_end - led_start
 
         self.sfm = SFM(
@@ -102,37 +115,133 @@ class Scanner:
         )
 
         self.current_view = last_view(existing_leds) + 1
-
         self.renderer3d = VisualiseProcess()
-
         self.detector_update_queue = Queue2D()
-        self.gui_3d_info_queue = Queue3DInfo()  # For GUI status table
+        self.gui_3d_info_queue = Queue3DInfo()
 
+        # Connect SFM outputs
+        self.sfm.add_output_queue(self.renderer3d.get_input_queue())
+        self.sfm.add_output_queue(self.file_writer.get_3d_input_queue())
+        self.sfm.add_output_info_queue(self.gui_3d_info_queue)
+
+        # Initialize mode-specific components
+        if self.multi_camera_mode:
+            logger.info(f"Initializing multi-camera mode with {len(axis_configs)} cameras")
+            self._init_multi_camera(axis_configs)
+        else:
+            logger.info("Initializing single-camera mode")
+            self._init_single_camera(axis_config)
+
+        logger.debug("scanner initialised")
+
+    def _init_single_camera(self, axis_config: Optional[dict]):
+        """Initialize single-camera mode (existing behavior)."""
+        self.detector = DetectorProcess(
+            device=self.device,
+            dark_exposure=self.exposure,
+            threshold=self.threshold,
+            backend_factory=self.backend_factory,
+            display=True,
+            check_movement=self.check_movement,
+            axis_config=axis_config,
+            frame_queue=self.frame_queue,
+        )
+
+        # Connect detector outputs
         self.detector.add_output_queue(self.sfm.get_input_queue())
         self.detector.add_output_queue(self.detector_update_queue)
         self.detector.add_output_queue(self.file_writer.get_2d_input_queue())
 
-        self.sfm.add_output_queue(self.renderer3d.get_input_queue())
-        self.sfm.add_output_queue(self.file_writer.get_3d_input_queue())
+        # Connect SFM to detector (for LED colorization)
         self.sfm.add_output_info_queue(self.detector.get_input_3d_info_queue())
-        self.sfm.add_output_info_queue(self.gui_3d_info_queue)  # Send to GUI too
+
+        # Start processes
         self.sfm.start()
         self.renderer3d.start()
         self.detector.start()
         self.file_writer.start()
 
-        # we add plus one here as I assume people want to include the last led they define
-        # Cache LED count since get_led_count() consumes from queue and can only be called once
+        # Get LED count
         self.led_count = self.detector.get_led_count()
         self.led_id_range = range(
-            led_start, min(led_end + 1, self.led_count)
+            self.led_start, min(self.led_end + 1, self.led_count)
         )
 
-        logger.debug("scanner initialised")
+        # Placeholder attributes for compatibility
+        self.coordinator = None
+        self.detector_workers = None
+
+    def _init_multi_camera(self, axis_configs: List[dict]):
+        """Initialize multi-camera mode with coordinator and workers."""
+        num_cameras = len(axis_configs)
+
+        # Create coordinator
+        self.coordinator = CoordinatorProcess(
+            backend_factory=self.backend_factory,
+            num_cameras=num_cameras,
+            led_start=self.led_start,
+            led_end=self.led_end,
+            detection_timeout=5.0,
+            led_stabilization_delay=0.05,
+        )
+
+        # Create detector workers
+        self.detector_workers = []
+        for camera_id, axis_cfg in enumerate(axis_configs):
+            # Each camera gets its own view_id (starting from current_view)
+            view_id = self.current_view + camera_id
+
+            worker = DetectorWorkerProcess(
+                camera_id=camera_id,
+                view_id=view_id,
+                device=None,  # Not used for AXIS cameras
+                dark_exposure=self.exposure,
+                threshold=self.threshold,
+                command_queue=self.coordinator.get_command_queue(camera_id),
+                result_queue=self.coordinator.get_result_queue(),
+                display=True,  # Show camera feed for each camera
+                axis_config=axis_cfg,
+            )
+
+            # Connect worker outputs
+            worker.add_output_queue(self.sfm.get_input_queue())
+            worker.add_output_queue(self.file_writer.get_2d_input_queue())
+            # Note: detector_update_queue is not used in multi-cam mode
+
+            self.detector_workers.append(worker)
+
+        # Start processes
+        self.sfm.start()
+        self.renderer3d.start()
+        self.file_writer.start()
+        self.coordinator.start()
+        for worker in self.detector_workers:
+            worker.start()
+
+        # Get LED count from coordinator
+        self.led_count = self.coordinator.get_led_count()
+        self.led_id_range = range(
+            self.led_start, min(self.led_end + 1, self.led_count)
+        )
+
+        # Placeholder attribute for compatibility
+        self.detector = None
+
+        logger.info(
+            f"Multi-camera mode initialized: {num_cameras} cameras, "
+            f"view IDs {self.current_view} to {self.current_view + num_cameras - 1}"
+        )
 
     def check_for_crash(self):
-        if not self.detector.is_alive():
-            raise Exception("LED Detector has stopped unexpectedly")
+        if self.multi_camera_mode:
+            if not self.coordinator.is_alive():
+                raise Exception("Coordinator has stopped unexpectedly")
+            for i, worker in enumerate(self.detector_workers):
+                if not worker.is_alive():
+                    raise Exception(f"Detector worker {i} has stopped unexpectedly")
+        else:
+            if not self.detector.is_alive():
+                raise Exception("LED Detector has stopped unexpectedly")
 
         if not self.sfm.is_alive():
             raise Exception("SFM has stopped unexpectedly")
@@ -153,22 +262,44 @@ class Scanner:
 
     def get_camera_command_queue(self):
         """Return the camera command queue for sending commands to detector."""
-        return self.detector.get_camera_command_queue()
+        if self.multi_camera_mode:
+            # Multi-camera mode doesn't support camera commands (no display)
+            logger.warning("Camera command queue not available in multi-camera mode")
+            return None
+        else:
+            return self.detector.get_camera_command_queue()
 
     def close(self):
         logger.debug("scanner closing")
 
-        # Signal all processes to stop
-        self.detector.stop()
-        self.sfm.stop()
-        self.renderer3d.stop()
-        self.file_writer.stop()
+        if self.multi_camera_mode:
+            # Stop coordinator and workers
+            self.coordinator.stop()
+            # Workers will stop when coordinator sends SCAN_COMPLETE
 
-        # Join with shorter timeouts for GUI responsiveness (3 seconds each)
-        join_with_warning(self.detector, "detector", timeout=3)
-        join_with_warning(self.sfm, "SFM", timeout=3)
-        join_with_warning(self.file_writer, "File Writer", timeout=3)
-        join_with_warning(self.renderer3d, "Visualiser", timeout=3)
+            # Signal common processes to stop
+            self.sfm.stop()
+            self.renderer3d.stop()
+            self.file_writer.stop()
+
+            # Join processes
+            join_with_warning(self.coordinator, "coordinator", timeout=3)
+            for i, worker in enumerate(self.detector_workers):
+                join_with_warning(worker, f"detector_worker_{i}", timeout=3)
+            join_with_warning(self.sfm, "SFM", timeout=3)
+            join_with_warning(self.file_writer, "File Writer", timeout=3)
+            join_with_warning(self.renderer3d, "Visualiser", timeout=3)
+        else:
+            # Single camera mode (existing behavior)
+            self.detector.stop()
+            self.sfm.stop()
+            self.renderer3d.stop()
+            self.file_writer.stop()
+
+            join_with_warning(self.detector, "detector", timeout=3)
+            join_with_warning(self.sfm, "SFM", timeout=3)
+            join_with_warning(self.file_writer, "File Writer", timeout=3)
+            join_with_warning(self.renderer3d, "Visualiser", timeout=3)
 
         logger.debug("scanner closed")
 
@@ -219,11 +350,24 @@ class Scanner:
                 print("LED range is zero, are you using a dummy backend?")
                 continue
 
-            self.detector.detect(
-                self.led_id_range.start, self.led_id_range.stop, self.current_view
-            )
+            if self.multi_camera_mode:
+                # Multi-camera mode: Signal coordinator to start
+                logger.info("Starting multi-camera scan...")
+                self.coordinator.start_scan()
 
-            success = self.wait_for_scan()
+                # Wait for completion
+                self.coordinator.wait_for_scan_complete()
+                logger.info("Multi-camera scan complete!")
 
-            if success:
-                self.current_view += 1
+                # Increment view counter by number of cameras
+                self.current_view += len(self.detector_workers)
+            else:
+                # Single-camera mode (existing behavior)
+                self.detector.detect(
+                    self.led_id_range.start, self.led_id_range.stop, self.current_view
+                )
+
+                success = self.wait_for_scan()
+
+                if success:
+                    self.current_view += 1

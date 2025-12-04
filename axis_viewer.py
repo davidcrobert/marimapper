@@ -3,7 +3,7 @@ from datetime import datetime
 import requests
 from requests.auth import HTTPDigestAuth
 
-CAMERA_HOST = "192.170.100.232"
+CAMERA_HOST = "192.170.100.242"
 USERNAME = "root"
 PASSWORD = "hemmer"
 BASE_URL = f"http://{CAMERA_HOST}/axis-cgi/param.cgi"

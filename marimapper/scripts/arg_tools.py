@@ -41,6 +41,23 @@ def add_camera_args(parser):
     )
 
     camera_options.add_argument(
+        "--axis-hosts",
+        type=str,
+        help="Multi-camera mode: Comma-separated list of Axis camera IPs (e.g., '192.168.1.100,192.168.1.101'). "
+             "All cameras use same username/password. Enables simultaneous multi-camera scanning.",
+        default=None,
+    )
+
+    camera_options.add_argument(
+        "--axis-cameras-json",
+        type=str,
+        help="Multi-camera mode: JSON array of camera configs with per-camera credentials. "
+             "Example: '[{\"host\":\"192.168.1.100\",\"username\":\"root\",\"password\":\"pwd1\"},"
+             "{\"host\":\"192.168.1.101\",\"username\":\"root\",\"password\":\"pwd2\"}]'",
+        default=None,
+    )
+
+    camera_options.add_argument(
         "--exposure",
         type=int,
         help="Camera exposure, the lower the value, the darker the image",

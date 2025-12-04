@@ -20,6 +20,7 @@ from marimapper.camera import Camera
 from marimapper.detector import set_cam_dark, set_cam_default, find_led_in_image, draw_led_detections
 from marimapper.led import LED2D, Point2D
 from marimapper.queues import Queue2D, DetectionControlEnum
+from marimapper.timeout_controller import TimeoutController
 import cv2
 
 logger = get_logger()
@@ -42,6 +43,7 @@ class DetectorWorkerProcess(Process):
         result_queue: Queue,
         display: bool = False,
         axis_config: Optional[dict] = None,
+        detection_timeout: float = 1.5,
     ):
         """
         Initialize detector worker.
@@ -56,6 +58,7 @@ class DetectorWorkerProcess(Process):
             result_queue: Queue to send results to coordinator
             display: Whether to display camera feed (usually False for multi-cam)
             axis_config: Configuration for AXIS IP camera
+            detection_timeout: Max seconds to wait for a detection before skipping
         """
         super().__init__()
         self.camera_id = camera_id
@@ -67,9 +70,14 @@ class DetectorWorkerProcess(Process):
         self.result_queue = result_queue
         self.display = display
         self.axis_config = axis_config
+        self.detection_timeout = detection_timeout
         self._window_name = f"MariMapper - Camera {self.camera_id}"
         self._preview_error_logged = False
         self._window_initialized = False
+        self._timeout_controller = TimeoutController(
+            default_timeout_sec=detection_timeout
+        )
+        self._in_scan = False
 
         # Output queues (will be set via add_output_queue)
         self._output_queues: List[Queue2D] = []
@@ -160,41 +168,61 @@ class DetectorWorkerProcess(Process):
         The LED should already be turned on by the coordinator before this is called.
         """
         self.detections_attempted += 1
+        if not self._in_scan:
+            try:
+                set_cam_dark(cam, self.dark_exposure)
+                cam.eat()  # flush buffered frames so we see fresh LED state
+                self._in_scan = True
+                logger.info(f"Camera {self.camera_id}: Entered scan mode (dark exposure)")
+            except Exception as e:
+                logger.warning(f"Camera {self.camera_id}: Failed to set dark exposure at scan start: {e}")
 
-        # Small delay to ensure LED is visible (coordinator also waits, but be safe)
-        time.sleep(0.02)
+        # Allow the LED to stabilize after being turned on by coordinator
+        time.sleep(0.03)
 
-        # Capture and detect
+        # Adaptive timeout based on previous response times (like single-cam TimeoutController)
+        deadline = time.time() + max(0.1, self._timeout_controller.timeout)
+        start_time = time.time()
+
         try:
-            led_detection = self._find_led_with_display(cam)
+            while True:
+                # Attempt detection
+                led_detection = self._find_led_with_display(cam)
 
-            if led_detection is not None:
-                # Success!
-                self.detections_successful += 1
+                if led_detection is not None:
+                    # Success!
+                    self.detections_successful += 1
+                    self._timeout_controller.add_response_time(time.time() - start_time)
 
-                # Send result to coordinator
-                self._send_result(led_id, True, led_detection.u(), led_detection.v())
+                    # Send result to coordinator
+                    self._send_result(led_id, True, led_detection.u(), led_detection.v())
 
-                # Send to SFM and other output queues
-                led_2d = LED2D(led_id, self.view_id, led_detection)
-                self._send_to_output_queues(DetectionControlEnum.DETECT, led_2d)
+                    # Send to SFM and other output queues
+                    led_2d = LED2D(led_id, self.view_id, led_detection)
+                    self._send_to_output_queues(DetectionControlEnum.DETECT, led_2d)
 
-                logger.debug(
-                    f"Camera {self.camera_id}: Detected LED {led_id} at "
-                    f"({led_detection.u():.3f}, {led_detection.v():.3f})"
-                )
-            else:
-                # Failed to detect
-                self._send_result(led_id, False, None, None)
-                self._send_to_output_queues(DetectionControlEnum.SKIP, led_id)
-                logger.debug(f"Camera {self.camera_id}: Failed to detect LED {led_id}")
+                    logger.debug(
+                        f"Camera {self.camera_id}: Detected LED {led_id} at "
+                        f"({led_detection.u():.3f}, {led_detection.v():.3f})"
+                    )
+                    return
+
+                # No detection yet; check timeout
+                if time.time() >= deadline:
+                    break
+
+                # Small delay to allow next frame
+                time.sleep(0.02)
 
         except Exception as e:
             logger.error(
                 f"Camera {self.camera_id}: Exception during LED {led_id} detection: {e}"
             )
-            self._send_result(led_id, False, None, None)
-            self._send_to_output_queues(DetectionControlEnum.SKIP, led_id)
+
+        # Failed to detect within timeout
+        self._send_result(led_id, False, None, None)
+        self._send_to_output_queues(DetectionControlEnum.SKIP, led_id)
+        logger.debug(f"Camera {self.camera_id}: Failed to detect LED {led_id} within timeout")
 
     def run(self):
         """Main worker loop - listen for commands and detect LEDs."""
@@ -208,11 +236,9 @@ class DetectorWorkerProcess(Process):
             cam = Camera(device_id=self.device, axis_config=self.axis_config)
             logger.info(f"Camera {self.camera_id}: Connected successfully")
 
-            # Set to dark mode for LED detection
-            set_cam_dark(cam, self.dark_exposure)
-            logger.info(
-                f"Camera {self.camera_id}: Set to dark mode (exposure={self.dark_exposure})"
-            )
+            # Default to bright/normal when idle so user can see preview
+            set_cam_default(cam)
+            logger.info(f"Camera {self.camera_id}: Set to bright/preview mode")
 
             # Prepare resizable window for previews/detections
             if self.display:
@@ -250,6 +276,18 @@ class DetectorWorkerProcess(Process):
 
                 elif msg_type == "SCAN_COMPLETE":
                     logger.info(f"Camera {self.camera_id}: Received SCAN_COMPLETE")
+                    # Return to bright/preview mode after scan and keep preview open
+                    try:
+                        set_cam_default(cam)
+                        cam.eat()
+                        logger.info(f"Camera {self.camera_id}: Exited scan mode (bright)")
+                    except Exception as e:
+                        logger.warning(f"Camera {self.camera_id}: Failed to reset exposure after scan: {e}")
+                    self._in_scan = False
+                    # keep looping for idle preview
+
+                elif msg_type == "EXIT":
+                    logger.info(f"Camera {self.camera_id}: Received EXIT")
                     break
 
                 else:

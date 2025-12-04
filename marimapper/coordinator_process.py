@@ -31,7 +31,7 @@ class CoordinatorProcess(Process):
         num_cameras: int,
         led_start: int,
         led_end: int,
-        detection_timeout: float = 5.0,
+        detection_timeout: float = 1.25,
         led_stabilization_delay: float = 0.05,
     ):
         """
@@ -97,6 +97,12 @@ class CoordinatorProcess(Process):
     def stop(self):
         """Signal coordinator to exit."""
         self._exit_event.set()
+        # Tell all workers to exit cleanly
+        for camera_id, cmd_queue in self._command_queues.items():
+            try:
+                cmd_queue.put(("EXIT",), timeout=0.5)
+            except Exception as e:
+                logger.warning(f"Failed to send EXIT to camera {camera_id}: {e}")
 
     def _blacken_backend(self, backend) -> bool:
         """Turn off all LEDs."""

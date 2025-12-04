@@ -175,13 +175,16 @@ class Scanner:
         """Initialize multi-camera mode with coordinator and workers."""
         num_cameras = len(axis_configs)
 
+        # Shared detection timeout for coordinator/workers
+        detection_timeout = 1.5
+
         # Create coordinator
         self.coordinator = CoordinatorProcess(
             backend_factory=self.backend_factory,
             num_cameras=num_cameras,
             led_start=self.led_start,
             led_end=self.led_end,
-            detection_timeout=5.0,
+            detection_timeout=detection_timeout,
             led_stabilization_delay=0.05,
         )
 
@@ -201,6 +204,7 @@ class Scanner:
                 result_queue=self.coordinator.get_result_queue(),
                 display=True,  # Show camera feed for each camera
                 axis_config=axis_cfg,
+                detection_timeout=detection_timeout,
             )
 
             # Connect worker outputs

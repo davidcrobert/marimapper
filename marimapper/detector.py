@@ -153,8 +153,8 @@ def enable_and_find_led(
     frame_queue=None,
 ) -> Optional[LED2D]:
 
-    darkness_timeout_seconds = 3.0
-
+    darkness_timeout_seconds = 1.25
+    
     # First wait for no leds to be visible, this should always be false
     start = time.time()
     while find_led(cam, threshold, display, frame_queue) is not None:

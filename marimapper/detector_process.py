@@ -158,6 +158,9 @@ class DetectorProcess(Process):
         self._check_movement = check_movement
         self._axis_config = axis_config
         self._frame_queue = frame_queue
+        # When a GUI is connected (frame_queue provided), avoid pushing 3D color overlays to the backend
+        # so LEDs stay off/controlled only by explicit GUI actions.
+        self._render_backend_info = frame_queue is None
 
     def get_input_3d_info_queue(self):
         return self._input_3d_info_queue
@@ -195,6 +198,10 @@ class DetectorProcess(Process):
             logger.info(f"LED count: {led_count}")
             self._led_count.put(led_count)
 
+            # Ensure all LEDs start off; some backends power up with a faint glow
+            if not backend_black(led_backend):
+                logger.debug("Failed to blacken backend on startup (may not support bulk off)")
+
             logger.info(f"Initializing camera (device={self._device}, axis_config={self._axis_config is not None})...")
             cam = Camera(device_id=self._device, axis_config=self._axis_config)
             logger.info("Camera initialized successfully")
@@ -208,6 +215,9 @@ class DetectorProcess(Process):
             logger.info("Camera mode test passed")
 
             logger.info(f"DetectorProcess initialized. Display: {self._display}, Frame queue: {self._frame_queue is not None}")
+
+            # Double-blackout after camera init to clear any faint glow some backends show
+            backend_black(led_backend)
 
         except Exception as e:
             logger.error(f"DetectorProcess failed to initialize: {e}")
@@ -307,6 +317,8 @@ class DetectorProcess(Process):
                 idle_loop_count += 1
                 if idle_loop_count == 1:
                     logger.info(f"Entering idle loop. Display={self._display}, frame_queue={self._frame_queue is not None}")
+                    # Ensure LEDs stay off while idle
+                    backend_black(led_backend)
 
                 # Check exit event BEFORE blocking on camera read
                 if self._exit_event.is_set():
@@ -331,7 +343,7 @@ class DetectorProcess(Process):
                         show_image(image)
                     time.sleep(1 / 60)
 
-                if not self._input_3d_info_queue.empty():
+                if self._render_backend_info and not self._input_3d_info_queue.empty():
                     led_info: dict[int, LEDInfo] = self._input_3d_info_queue.get()
 
                     success = render_led_info(led_info, led_backend)

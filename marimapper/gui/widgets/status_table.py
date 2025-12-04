@@ -15,6 +15,7 @@ class StatusTable(QWidget):
 
     # Signals
     led_toggle_requested = pyqtSignal(int, bool)  # (led_id, turn_on)
+    bulk_led_toggle_requested = pyqtSignal(list)  # [(led_id, turn_on), ...]
 
     # Color scheme for LED states
     COLORS = {
@@ -508,11 +509,16 @@ class StatusTable(QWidget):
         filtered_ids = [led_id for led_id, _ in self._filtered_items()]
         print(f"StatusTable: Turning ON {len(filtered_ids)} filtered LEDs ({self.active_filter})")
 
+        # Build list of LEDs that need to change state
+        changes = []
         for led_id in filtered_ids:
             if led_id not in self.manual_on_leds:
                 self.manual_on_leds.add(led_id)
-                # Emit signal to actually control the LED
-                self.led_toggle_requested.emit(led_id, True)
+                changes.append((led_id, True))
+
+        # Emit bulk signal to control all LEDs at once
+        if changes:
+            self.bulk_led_toggle_requested.emit(changes)
 
         # Refresh table to show updated visual state
         self._refresh_table()
@@ -525,11 +531,16 @@ class StatusTable(QWidget):
         filtered_ids = [led_id for led_id, _ in self._filtered_items()]
         print(f"StatusTable: Turning OFF {len(filtered_ids)} filtered LEDs ({self.active_filter})")
 
+        # Build list of LEDs that need to change state
+        changes = []
         for led_id in filtered_ids:
             if led_id in self.manual_on_leds:
                 self.manual_on_leds.discard(led_id)
-                # Emit signal to actually control the LED
-                self.led_toggle_requested.emit(led_id, False)
+                changes.append((led_id, False))
+
+        # Emit bulk signal to control all LEDs at once
+        if changes:
+            self.bulk_led_toggle_requested.emit(changes)
 
         # Refresh table to show updated visual state
         self._refresh_table()

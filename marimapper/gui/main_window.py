@@ -195,6 +195,7 @@ class MainWindow(QMainWindow):
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
+        self.status_table.bulk_led_toggle_requested.connect(self.set_bulk_leds)
 
         # Connect control panel to status table for visual state updates
         self.control_panel.all_off_requested.connect(self.status_table.set_all_off_state)
@@ -389,6 +390,28 @@ class MainWindow(QMainWindow):
             self.log_widget.log_info(f"LED {led_id} turned {status}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to control LED {led_id}: {str(e)}")
+
+    @pyqtSlot(list)
+    def set_bulk_leds(self, changes: list):
+        """Turn on or off multiple LEDs at once.
+
+        Args:
+            changes: List of (led_id, turn_on) tuples
+        """
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put((CameraCommand.SET_LEDS_BULK, changes))
+
+            on_count = sum(1 for _, state in changes if state)
+            off_count = len(changes) - on_count
+            self.log_widget.log_info(f"Bulk LED control: {on_count} ON, {off_count} OFF")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to control LEDs in bulk: {str(e)}")
 
     @pyqtSlot()
     def set_all_on(self):

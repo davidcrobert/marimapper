@@ -130,8 +130,8 @@ class MainWindow(QMainWindow):
         self.log_widget = LogWidget()
         left_splitter.addWidget(self.log_widget)
 
-        # Set initial sizes (video takes more space, log shrunk)
-        left_splitter.setSizes([600, 100])
+        # Set initial sizes (video takes more space, log reasonably tall)
+        left_splitter.setSizes([600, 200])
 
         # Right side: Control panel and status table
         right_widget = QWidget()

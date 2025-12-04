@@ -1,0 +1,11 @@
+ptz.zoom=1.0
+ImageSource.I0.Sensor.Brightness=50
+ImageSource.I0.Sensor.CaptureMode=1
+ImageSource.I0.Sensor.ColorLevel=50
+ImageSource.I0.Sensor.Contrast=100
+ImageSource.I0.Sensor.LocalContrast=50
+ImageSource.I0.Sensor.LowLatencyMode=on
+ImageSource.I0.Sensor.Sharpness=50
+ImageSource.I0.Sensor.ToneMapping=50
+ImageSource.I0.Sensor.WDR=on
+ImageSource.I0.Sensor.WhiteBalance=auto

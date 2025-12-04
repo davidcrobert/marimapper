@@ -88,12 +88,20 @@ def draw_led_detections(image: cv2.Mat, led_detection: Optional[Point2D]) -> np.
     return render_image
 
 
-def show_image(image: np.ndarray) -> None:
-    cv2.imshow("MariMapper - Detector", image)
-    key = cv2.waitKey(1)
+def show_image(image: np.ndarray, frame_queue=None) -> None:
+    if frame_queue is not None:
+        # GUI mode: Send frame to queue (non-blocking)
+        try:
+            frame_queue.put_nowait(image)
+        except:
+            pass  # Queue full, drop frame
+    else:
+        # CLI mode: Show window
+        cv2.imshow("MariMapper - Detector", image)
+        key = cv2.waitKey(1)
 
-    if key == 27:  # esc
-        raise KeyboardInterrupt
+        if key == 27:  # esc
+            raise KeyboardInterrupt
 
 
 def set_cam_default(cam: Camera) -> None:
@@ -121,7 +129,7 @@ def set_cam_dark(cam: Camera, exposure: int) -> bool:
 
 
 def find_led(
-    cam: Camera, threshold: int = 128, display: bool = True
+    cam: Camera, threshold: int = 128, display: bool = True, frame_queue=None
 ) -> Optional[Point2D]:
 
     image = cam.read()
@@ -129,7 +137,7 @@ def find_led(
 
     if display:
         rendered_image = draw_led_detections(image, results)
-        show_image(rendered_image)
+        show_image(rendered_image, frame_queue)
 
     return results
 
@@ -142,13 +150,14 @@ def enable_and_find_led(
     timeout_controller: TimeoutController,
     threshold: int,
     display: bool = False,
+    frame_queue=None,
 ) -> Optional[LED2D]:
 
     darkness_timeout_seconds = 3.0
 
     # First wait for no leds to be visible, this should always be false
     start = time.time()
-    while find_led(cam, threshold, display) is not None:
+    while find_led(cam, threshold, display, frame_queue) is not None:
         if time.time() - start > darkness_timeout_seconds:
             logging.warning(
                 f"Detector can't start detecting led {led_id} as an led is already visible"
@@ -165,7 +174,7 @@ def enable_and_find_led(
     while (
         point is None and time.time() < response_time_start + timeout_controller.timeout
     ):
-        point = find_led(cam, threshold, display)
+        point = find_led(cam, threshold, display, frame_queue)
 
     led_backend.set_led(led_id, False)
 
@@ -175,7 +184,7 @@ def enable_and_find_led(
     timeout_controller.add_response_time(time.time() - response_time_start)
 
     start = time.time()
-    while find_led(cam, threshold, display) is not None:
+    while find_led(cam, threshold, display, frame_queue) is not None:
         if time.time() - start > darkness_timeout_seconds:
             logging.warning(
                 f"Detector can't stop detecting led {led_id} as an led is already visible, retrying backend..."

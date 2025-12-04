@@ -6,7 +6,7 @@ from tqdm import tqdm
 from pathlib import Path
 from marimapper.detector_process import DetectorProcess
 from marimapper.queues import Queue2D, DetectionControlEnum
-from multiprocessing import get_logger, set_start_method
+from multiprocessing import get_logger, set_start_method, get_start_method
 from marimapper.file_tools import get_all_2d_led_maps
 from marimapper.utils import get_user_confirmation
 from marimapper.visualize_process import VisualiseProcess
@@ -61,9 +61,13 @@ class Scanner:
         check_movement: bool,
         camera_model_name: str,
         axis_config: dict = None,
+        frame_queue=None,
     ):
         logger.debug("initialising scanner")
-        set_start_method("spawn")  # VERY important, see top of file
+        # VERY important, see top of file
+        # Only set if not already set (GUI may have already set it)
+        if get_start_method(allow_none=True) != "spawn":
+            set_start_method("spawn")
         self.output_dir = output_dir
 
         self.detector = DetectorProcess(
@@ -74,6 +78,7 @@ class Scanner:
             display=True,
             check_movement=check_movement,
             axis_config=axis_config,
+            frame_queue=frame_queue,
         )
 
         self.file_writer = FileWriterProcess(self.output_dir)
@@ -128,6 +133,10 @@ class Scanner:
 
         if not self.file_writer.is_alive():
             raise Exception("File writer has stopped unexpectedly")
+
+    def create_detector_update_queue(self):
+        """Return the detector update queue for GUI monitoring."""
+        return self.detector_update_queue
 
     def close(self):
         logger.debug("scanner closing")

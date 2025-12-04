@@ -56,6 +56,7 @@ def detect_leds(
     threshold: int,
     display: bool,
     output_queues: list[Queue2D],
+    frame_queue=None,
 ):
     leds = []
     for led_id in range(led_id_from, led_id_to):
@@ -67,6 +68,7 @@ def detect_leds(
             timeout_controller,
             threshold,
             display,
+            frame_queue,
         )
 
         for queue in output_queues:
@@ -89,6 +91,7 @@ class DetectorProcess(Process):
         display: bool = True,
         check_movement=True,
         axis_config: dict = None,
+        frame_queue: Queue = None,
     ):
         super().__init__()
         self._request_detections_queue = RequestDetectionsQueue()  # {led_id, view_id}
@@ -105,6 +108,7 @@ class DetectorProcess(Process):
         self._display = display
         self._check_movement = check_movement
         self._axis_config = axis_config
+        self._frame_queue = frame_queue
 
     def get_input_3d_info_queue(self):
         return self._input_3d_info_queue
@@ -158,7 +162,7 @@ class DetectorProcess(Process):
                 set_cam_dark(cam, self._dark_exposure)
 
                 # Firstly, if there are leds visible, break out
-                if find_led(cam, self._threshold, self._display) is not None:
+                if find_led(cam, self._threshold, self._display, self._frame_queue) is not None:
                     logger.error(
                         "Detector process can detect an LED when no LEDs should be visible"
                     )
@@ -177,6 +181,7 @@ class DetectorProcess(Process):
                     self._threshold,
                     self._display,
                     self._output_queues,
+                    self._frame_queue,
                 )
 
                 if leds is not None and len(leds) > 0:
@@ -193,6 +198,7 @@ class DetectorProcess(Process):
                             timeout_controller,
                             self._threshold,
                             self._display,
+                            self._frame_queue,
                         )
                         if led_current is not None:
                             distance = get_distance(led_current, led_first)
@@ -224,7 +230,16 @@ class DetectorProcess(Process):
             if self._request_detections_queue.empty():
                 if self._display:
                     image = cam.read()
-                    show_image(image)
+                    # Send frame to GUI if frame_queue is provided
+                    if self._frame_queue is not None:
+                        # Use put_nowait to avoid blocking if queue is full (drop frames)
+                        try:
+                            self._frame_queue.put_nowait(image)
+                        except:
+                            pass  # Queue full, drop frame
+                    else:
+                        # CLI mode: Show window
+                        show_image(image)
                     time.sleep(1 / 60)
 
                 if not self._input_3d_info_queue.empty():

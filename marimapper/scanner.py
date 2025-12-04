@@ -34,7 +34,12 @@ def join_with_warning(process_to_join, process_name, timeout=10):
     )  # Strangely the return code for join does not match the exitcode attribute
 
     if process_to_join.exitcode is None:
-        logger.warning(f"{process_name} failed to stop, some data might be lost")
+        logger.warning(f"{process_name} failed to stop gracefully after {timeout}s, forcing termination")
+        process_to_join.terminate()  # Force kill the process
+        process_to_join.join(timeout=2)  # Wait briefly for termination
+        if process_to_join.exitcode is None:
+            logger.error(f"{process_name} could not be terminated, killing")
+            process_to_join.kill()  # Nuclear option
         return
     if process_to_join.exitcode != 0:
         logger.warning(
@@ -115,8 +120,10 @@ class Scanner:
         self.file_writer.start()
 
         # we add plus one here as I assume people want to include the last led they define
+        # Cache LED count since get_led_count() consumes from queue and can only be called once
+        self.led_count = self.detector.get_led_count()
         self.led_id_range = range(
-            led_start, min(led_end + 1, self.detector.get_led_count())
+            led_start, min(led_end + 1, self.led_count)
         )
 
         logger.debug("scanner initialised")
@@ -141,15 +148,17 @@ class Scanner:
     def close(self):
         logger.debug("scanner closing")
 
+        # Signal all processes to stop
         self.detector.stop()
         self.sfm.stop()
         self.renderer3d.stop()
         self.file_writer.stop()
 
-        join_with_warning(self.detector, "detector")
-        join_with_warning(self.sfm, "SFM")
-        join_with_warning(self.file_writer, "File Writer")
-        join_with_warning(self.renderer3d, "Visualiser")
+        # Join with shorter timeouts for GUI responsiveness (3 seconds each)
+        join_with_warning(self.detector, "detector", timeout=3)
+        join_with_warning(self.sfm, "SFM", timeout=3)
+        join_with_warning(self.file_writer, "File Writer", timeout=3)
+        join_with_warning(self.renderer3d, "Visualiser", timeout=3)
 
         logger.debug("scanner closed")
 

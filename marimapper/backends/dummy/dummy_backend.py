@@ -16,7 +16,7 @@ class Backend:
         pass
 
     def get_led_count(self):
-        return 0
+        return 100  # Return 100 dummy LEDs for testing
 
     def set_led(self, led_index: int, on: bool):
         pass

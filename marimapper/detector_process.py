@@ -1,5 +1,6 @@
 from multiprocessing import get_logger, Process, Queue, Event
 import time
+from enum import Enum
 from marimapper.detector import (
     show_image,
     set_cam_default,
@@ -19,6 +20,12 @@ from marimapper.queues import (
 from functools import partial
 
 logger = get_logger()
+
+
+class CameraCommand(Enum):
+    """Commands for controlling camera exposure."""
+    SET_DARK = "set_dark"
+    SET_BRIGHT = "set_bright"
 
 
 def backend_black(backend):
@@ -133,19 +140,40 @@ class DetectorProcess(Process):
             queue.put(control, data)
 
     def run(self):
+        try:
+            logger.info("DetectorProcess starting...")
 
-        led_backend = self._led_backend_factory()
+            led_backend = self._led_backend_factory()
+            logger.info(f"Backend created: {type(led_backend).__name__}")
 
-        self._led_count.put(led_backend.get_led_count())
+            led_count = led_backend.get_led_count()
+            logger.info(f"LED count: {led_count}")
+            self._led_count.put(led_count)
 
-        cam = Camera(device_id=self._device, axis_config=self._axis_config)
+            logger.info(f"Initializing camera (device={self._device}, axis_config={self._axis_config is not None})...")
+            cam = Camera(device_id=self._device, axis_config=self._axis_config)
+            logger.info("Camera initialized successfully")
 
-        timeout_controller = TimeoutController()
+            timeout_controller = TimeoutController()
 
-        # we quickly switch to dark mode here to throw any exceptions about the camera early
-        set_cam_dark(cam, self._dark_exposure)
-        set_cam_default(cam)
+            # we quickly switch to dark mode here to throw any exceptions about the camera early
+            logger.info("Setting camera to dark mode for testing...")
+            set_cam_dark(cam, self._dark_exposure)
+            set_cam_default(cam)
+            logger.info("Camera mode test passed")
 
+            logger.info(f"DetectorProcess initialized. Display: {self._display}, Frame queue: {self._frame_queue is not None}")
+
+        except Exception as e:
+            logger.error(f"DetectorProcess failed to initialize: {e}")
+            import traceback
+            traceback.print_exc()
+            # Put an error value in led_count queue so caller doesn't hang
+            self._led_count.put(-1)
+            return
+
+        frame_send_count = 0
+        idle_loop_count = 0
         while not self._exit_event.is_set():
 
             if not self._request_detections_queue.empty():
@@ -228,6 +256,14 @@ class DetectorProcess(Process):
                 set_cam_default(cam)
 
             if self._request_detections_queue.empty():
+                idle_loop_count += 1
+                if idle_loop_count == 1:
+                    logger.info(f"Entering idle loop. Display={self._display}, frame_queue={self._frame_queue is not None}")
+
+                # Check exit event BEFORE blocking on camera read
+                if self._exit_event.is_set():
+                    break
+
                 if self._display:
                     image = cam.read()
                     # Send frame to GUI if frame_queue is provided
@@ -235,7 +271,12 @@ class DetectorProcess(Process):
                         # Use put_nowait to avoid blocking if queue is full (drop frames)
                         try:
                             self._frame_queue.put_nowait(image)
-                        except:
+                            frame_send_count += 1
+                            if frame_send_count <= 3:  # Log first 3 frames
+                                logger.info(f"Sent frame {frame_send_count} to GUI queue. Shape: {image.shape}")
+                        except Exception as e:
+                            if frame_send_count == 0:  # Only log if we haven't sent any frames yet
+                                logger.warning(f"Failed to send frame to GUI queue: {e}")
                             pass  # Queue full, drop frame
                     else:
                         # CLI mode: Show window
@@ -252,6 +293,22 @@ class DetectorProcess(Process):
                         )
 
         logger.info("detector closing, resetting camera and backend")
-        set_cam_default(cam)
-        backend_black(led_backend)
-        time.sleep(1)  # wait a moment for the backend to update before closing
+        try:
+            set_cam_default(cam)
+        except Exception as e:
+            logger.warning(f"Failed to reset camera to default: {e}")
+
+        try:
+            backend_black(led_backend)
+        except Exception as e:
+            logger.warning(f"Failed to black out backend: {e}")
+
+        # Release camera resources
+        try:
+            logger.info("Releasing camera...")
+            cam.device.release()
+            logger.info("Camera released")
+        except Exception as e:
+            logger.warning(f"Failed to release camera: {e}")
+
+        time.sleep(0.1)  # Brief pause for cleanup

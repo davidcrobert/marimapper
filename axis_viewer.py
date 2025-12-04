@@ -165,8 +165,10 @@ def save_camera_config(path: str = CONFIG_FILE):
         for part in zoom_resp.text.strip().split():
             if part.startswith("zoom="):
                 try:
-                    zoom_val = part.split("=", 1)[1]
-                except IndexError:
+                    zoom_raw = part.split("=", 1)[1]
+                    # Axis PTZ expects integer zoom (0-9999); coerce floats if returned
+                    zoom_val = str(int(round(float(zoom_raw))))
+                except (IndexError, ValueError):
                     zoom_val = None
     if zoom_val is None:
         # Fallback to a safe default if zoom query fails
@@ -175,7 +177,7 @@ def save_camera_config(path: str = CONFIG_FILE):
     try:
         with open(path, "w", encoding="utf-8") as f:
             if zoom_val is not None:
-                f.write(f"zoom={zoom_val}\n")
+                f.write(f"ptz.zoom={zoom_val}\n")
             for key in sorted(params_dict.keys()):
                 f.write(f"{key}={params_dict[key]}\n")
         print(f"[VAPIX] Saved whitelisted params to {path}")
@@ -184,7 +186,7 @@ def save_camera_config(path: str = CONFIG_FILE):
 
 
 def apply_camera_config(config_path: str = CONFIG_FILE):
-    """Apply whitelisted params + zoom from config (forces zoom=1.0)."""
+    """Apply whitelisted params + zoom from config."""
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config_lines = f.read().splitlines()
@@ -194,6 +196,7 @@ def apply_camera_config(config_path: str = CONFIG_FILE):
 
     applied = 0
     failed = 0
+    zoom_val = None
     for line in config_lines:
         if "=" not in line:
             continue
@@ -204,7 +207,12 @@ def apply_camera_config(config_path: str = CONFIG_FILE):
             continue
         if key.startswith("root."):
             key = key[5:]
-        if key == "ptz.zoom":
+        if key in ("ptz.zoom", "zoom"):
+            # Coerce any numeric string to an int string for VAPIX zoom
+            try:
+                zoom_val = str(int(round(float(val))))
+            except ValueError:
+                zoom_val = val
             continue  # handled later
         if key not in WHITELIST_PARAMS:
             continue
@@ -214,15 +222,16 @@ def apply_camera_config(config_path: str = CONFIG_FILE):
         else:
             applied += 1
 
-    # Force zoom to 1.0 regardless of config content
-    zoom_resp = _ptz_request({"zoom": "1.0"})
-    if zoom_resp is None:
-        failed += 1
-    else:
-        applied += 1
+    # Apply zoom if present in config
+    if zoom_val is not None:
+        zoom_resp = _ptz_request({"zoom": zoom_val})
+        if zoom_resp is None:
+            failed += 1
+        else:
+            applied += 1
 
     print(
-        f"[VAPIX] Applied {applied} params (zoom forced to 1.0), failed {failed} from {config_path}"
+        f"[VAPIX] Applied {applied} params, failed {failed} from {config_path}"
     )
 
 def main():
@@ -236,7 +245,7 @@ def main():
     window = "AXIS Camera Feed (press q to quit)"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     print(
-        "Controls: q=quit, p=list params, i=lock aperture (Enabled=no), o=unlock (Enabled=yes), ]=open iris (+5, locked), [=close iris (-5, locked), s=save config (whitelist+zoom), l=load/apply config (zoom forced to 1.0)"
+        "Controls: q=quit, p=list params, i=lock aperture (Enabled=no), o=unlock (Enabled=yes), ]=open iris (+5, locked), [=close iris (-5, locked), s=save config (whitelist+zoom), l=load/apply config (includes zoom)"
     )
 
     try:

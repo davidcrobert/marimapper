@@ -42,14 +42,24 @@ class StatusMonitorThread(QThread):
 
     def run(self):
         """Main thread loop - polls queues and emits signals."""
+        frame_count = 0
+        loop_count = 0
+        self.signals.log_message.emit("info", "Status monitor thread started")
+
         while self.running:
+            loop_count += 1
             try:
                 # Poll frame queue (non-blocking)
                 if not self.frame_queue.empty():
                     try:
                         frame = self.frame_queue.get_nowait()
+                        frame_count += 1
+                        if frame_count <= 3:  # Log first 3 frames
+                            self.signals.log_message.emit("info", f"Frame {frame_count} received: shape={frame.shape}")
                         self.signals.frame_ready.emit(frame)
-                    except:
+                    except Exception as e:
+                        if frame_count == 0:  # Only log if we haven't received any frames yet
+                            self.signals.log_message.emit("warning", f"Error getting frame: {e}")
                         pass  # Queue empty, ignore
 
                 # Poll detector update queue (non-blocking)
@@ -96,6 +106,11 @@ class StatusMonitorThread(QThread):
 
                     except:
                         pass  # Queue empty or other error, ignore
+
+                # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)
+                if loop_count == 90 and frame_count == 0:
+                    self.signals.log_message.emit("warning",
+                        f"No frames received yet. Queue empty: {self.frame_queue.empty()}")
 
                 # Sleep briefly to avoid busy-waiting
                 time.sleep(0.033)  # ~30 Hz polling rate

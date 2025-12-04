@@ -38,7 +38,7 @@ def main():
     """Main entry point for MariMapper GUI."""
 
     logger = multiprocessing.log_to_stderr()
-    logger.setLevel(level=logging.WARNING)
+    logger.setLevel(level=logging.INFO)  # Set to INFO to see detector process logs
 
     parser = argparse.ArgumentParser(
         description="MariMapper GUI - Scan LEDs in 3D space using your webcam",

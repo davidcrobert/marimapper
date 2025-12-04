@@ -38,6 +38,9 @@ class ScannerInitThread(QThread):
     def run(self):
         """Run scanner initialization in background thread."""
         try:
+            import sys
+            print("ScannerInitThread: Creating Scanner...", file=sys.stderr, flush=True)
+
             # Create Scanner instance
             scanner = Scanner(
                 output_dir=self.scanner_args.output_dir,
@@ -55,13 +58,23 @@ class ScannerInitThread(QThread):
                 frame_queue=self.frame_queue,
             )
 
-            # Get LED count (this blocks waiting for detector process)
-            led_count = scanner.detector.get_led_count()
+            print("ScannerInitThread: Scanner created successfully!", file=sys.stderr, flush=True)
+
+            # Get LED count from cached value (Scanner.__init__ already called get_led_count())
+            led_count = scanner.led_count
+            print(f"ScannerInitThread: LED count: {led_count}", file=sys.stderr, flush=True)
+
+            # Check for error value
+            if led_count < 0:
+                raise Exception("Detector process failed to initialize. Check console for error details (likely camera unavailable).")
 
             # Emit success signal
             self.finished.emit(scanner, led_count)
 
         except Exception as e:
+            import traceback
+            print(f"ScannerInitThread ERROR: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc()
             # Emit error signal
             self.error.emit(str(e))
 
@@ -164,6 +177,7 @@ class MainWindow(QMainWindow):
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
+        self.log_widget.log_info("Testing change...")
         self.log_widget.log_info("Initializing scanner...")
 
         # Create frame queue for receiving video frames
@@ -196,6 +210,10 @@ class MainWindow(QMainWindow):
             self.signals, self.frame_queue, detector_update_queue
         )
         self.monitor_thread.start()
+
+        # Log diagnostic information
+        self.log_widget.log_info(f"Detector process alive: {scanner.detector.is_alive()}")
+        self.log_widget.log_info(f"Frame queue created: {self.frame_queue is not None}")
 
         # Enable controls now that scanner is ready
         self.control_panel.start_button.setEnabled(True)
@@ -283,21 +301,30 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event - clean up scanner and threads."""
+        self.log_widget.log_info("Shutting down...")
+        self.statusBar().showMessage("Closing...")
+
         # Stop initialization thread if still running
         if self.init_thread is not None and self.init_thread.isRunning():
-            self.init_thread.wait(2000)  # Wait up to 2 seconds
+            self.log_widget.log_info("Stopping initialization thread...")
+            if not self.init_thread.wait(2000):  # Wait up to 2 seconds
+                self.log_widget.log_warning("Initialization thread did not stop in time")
 
         # Stop monitor thread
         if self.monitor_thread is not None:
+            self.log_widget.log_info("Stopping monitor thread...")
             self.monitor_thread.stop()
-            self.monitor_thread.wait(2000)  # Wait up to 2 seconds
+            if not self.monitor_thread.wait(1000):  # Wait up to 1 second
+                self.log_widget.log_warning("Monitor thread did not stop in time")
 
-        # Close scanner
+        # Close scanner (this stops all child processes)
         if self.scanner is not None:
             try:
-                self.log_widget.log_info("Closing scanner...")
+                self.log_widget.log_info("Closing scanner processes...")
                 self.scanner.close()
+                self.log_widget.log_success("Scanner closed successfully")
             except Exception as e:
                 self.log_widget.log_error(f"Error closing scanner: {str(e)}")
 
+        self.log_widget.log_success("Shutdown complete")
         event.accept()

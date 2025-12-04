@@ -5,9 +5,9 @@ Displays the reconstruction status of each LED with color-coded rows.
 """
 
 import math
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton
 from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QCursor
 
 
 class StatusTable(QWidget):
@@ -43,6 +43,8 @@ class StatusTable(QWidget):
         self.manual_on_leds: set[int] = set()
         self.pairs_per_row = 10  # Each LED occupies two columns (ID + status)
         self.columns_configured = False  # Track if columns have been set up
+        self.active_filter = None  # Currently active status filter (None = show all)
+        self.filter_buttons = {}  # Map status name to its button widget
         self.init_ui()
 
     def init_ui(self):
@@ -55,10 +57,15 @@ class StatusTable(QWidget):
         self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.summary_label)
 
-        # Compact legend showing status colors and names
+        # Top bar: Legend + filter action buttons
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.setSpacing(8)
+        top_bar_layout.setContentsMargins(4, 2, 4, 2)
+
+        # Compact legend showing status colors and names (clickable for filtering)
         legend_layout = QHBoxLayout()
         legend_layout.setSpacing(3)
-        legend_layout.setContentsMargins(4, 2, 4, 2)
+        legend_layout.setContentsMargins(0, 0, 0, 0)
 
         status_info = [
             ("R", "RECONSTRUCTED", "Reconstructed", "3D position found via SfM"),
@@ -70,28 +77,106 @@ class StatusTable(QWidget):
         ]
 
         for abbr, status, display_name, description in status_info:
-            # Color square
-            color_label = QLabel()
-            color_label.setFixedSize(10, 10)
-            color_label.setStyleSheet(f"background-color: {self.COLORS[status].name()}; border: 1px solid #999;")
-            color_label.setToolTip(description)
+            # Create clickable button for each status
+            status_button = QPushButton()
+            status_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
-            # Full name with abbreviation in brackets
-            text_label = QLabel(f"{display_name} ({abbr})")
-            text_label.setToolTip(description)
-            text_label.setStyleSheet("font-size: 9px;")
+            # Color square as part of button text (using Unicode square)
+            color_hex = self.COLORS[status].name()
+            status_button.setText(f"  {display_name} ({abbr})")
+            status_button.setToolTip(f"{description}\n\nClick to filter table to only {display_name} LEDs.\nClick again to clear filter.")
 
-            legend_layout.addWidget(color_label)
-            legend_layout.addWidget(text_label)
-            legend_layout.addSpacing(6)
+            # Style button with color square indicator
+            status_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    border: 2px solid transparent;
+                    border-radius: 3px;
+                    text-align: left;
+                    padding: 2px 4px;
+                    font-size: 9px;
+                    background-image: qlineargradient(x1:0, y1:0, x2:0.05, y2:0,
+                        stop:0 {color_hex}, stop:1 {color_hex});
+                    padding-left: 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: rgba(0, 0, 0, 0.05);
+                }}
+                QPushButton:pressed {{
+                    background-color: rgba(0, 0, 0, 0.1);
+                }}
+            """)
+
+            # Connect click handler
+            status_button.clicked.connect(lambda checked, s=status: self._toggle_filter(s))
+
+            # Store button reference for later styling updates
+            self.filter_buttons[status] = status_button
+
+            legend_layout.addWidget(status_button)
 
         legend_layout.addStretch()
 
+        # Add legend to top bar
+        top_bar_layout.addLayout(legend_layout, stretch=1)
+
+        # Filter action buttons (initially hidden)
+        filter_buttons_layout = QHBoxLayout()
+        filter_buttons_layout.setSpacing(4)
+
+        self.filter_all_on_button = QPushButton("Turn All ON")
+        self.filter_all_on_button.setToolTip("Turn on all LEDs in the current filter")
+        self.filter_all_on_button.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 4px 8px;
+                font-size: 9px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
+            }
+        """)
+        self.filter_all_on_button.clicked.connect(self._turn_filtered_on)
+        self.filter_all_on_button.setVisible(False)
+        filter_buttons_layout.addWidget(self.filter_all_on_button)
+
+        self.filter_all_off_button = QPushButton("Turn All OFF")
+        self.filter_all_off_button.setToolTip("Turn off all LEDs in the current filter")
+        self.filter_all_off_button.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 4px 8px;
+                font-size: 9px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+        """)
+        self.filter_all_off_button.clicked.connect(self._turn_filtered_off)
+        self.filter_all_off_button.setVisible(False)
+        filter_buttons_layout.addWidget(self.filter_all_off_button)
+
+        top_bar_layout.addLayout(filter_buttons_layout)
+
         # Wrap in a widget for styling
         legend_widget = QWidget()
-        legend_widget.setLayout(legend_layout)
+        legend_widget.setLayout(top_bar_layout)
         legend_widget.setStyleSheet("QWidget { background-color: #f5f5f5; border: 1px solid #ccc; border-radius: 3px; }")
-        legend_widget.setMaximumHeight(22)
+        legend_widget.setMaximumHeight(26)
 
         layout.addWidget(legend_widget)
 
@@ -154,6 +239,73 @@ class StatusTable(QWidget):
         """Return short label for a status name."""
         return self.ABBREVIATIONS.get(status, status[:2].upper())
 
+    def _toggle_filter(self, status: str):
+        """Toggle filtering by the selected status."""
+        if self.active_filter == status:
+            # Clear filter if clicking the same status
+            self.active_filter = None
+            print(f"StatusTable: Filter cleared")
+        else:
+            # Set new filter
+            self.active_filter = status
+            print(f"StatusTable: Filtering by {status}")
+
+        # Update button styles to show active filter
+        self._update_filter_button_styles()
+
+        # Show/hide filter action buttons
+        self.filter_all_on_button.setVisible(self.active_filter is not None)
+        self.filter_all_off_button.setVisible(self.active_filter is not None)
+
+        # Refresh the table display
+        self._refresh_table()
+
+    def _update_filter_button_styles(self):
+        """Update button styles to highlight the active filter."""
+        for status, button in self.filter_buttons.items():
+            color_hex = self.COLORS[status].name()
+
+            if status == self.active_filter:
+                # Active filter - bold border
+                button.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: rgba(0, 120, 215, 0.1);
+                        border: 2px solid #0078d7;
+                        border-radius: 3px;
+                        text-align: left;
+                        padding: 2px 4px;
+                        font-size: 9px;
+                        font-weight: bold;
+                        background-image: qlineargradient(x1:0, y1:0, x2:0.05, y2:0,
+                            stop:0 {color_hex}, stop:1 {color_hex});
+                        padding-left: 14px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: rgba(0, 120, 215, 0.15);
+                    }}
+                """)
+            else:
+                # Inactive - normal style
+                button.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: transparent;
+                        border: 2px solid transparent;
+                        border-radius: 3px;
+                        text-align: left;
+                        padding: 2px 4px;
+                        font-size: 9px;
+                        background-image: qlineargradient(x1:0, y1:0, x2:0.05, y2:0,
+                            stop:0 {color_hex}, stop:1 {color_hex});
+                        padding-left: 14px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: rgba(0, 0, 0, 0.05);
+                    }}
+                    QPushButton:pressed {{
+                        background-color: rgba(0, 0, 0, 0.1);
+                    }}
+                """)
+
     @pyqtSlot(dict)
     def update_led_info(self, led_info_dict: dict):
         """
@@ -172,13 +324,24 @@ class StatusTable(QWidget):
         if not self.columns_configured:
             self._configure_columns()
 
+        # Refresh the table with current filter
+        self._refresh_table()
+
+    def _refresh_table(self):
+        """Refresh the table display with current data and filter."""
+        # Get filtered LEDs
+        filtered_items = list(self._filtered_items())
+        led_count = len(filtered_items)
+
         # Update table row count (chunk LEDs across multiple columns)
-        led_count = len(led_info_dict)
         rows = math.ceil(led_count / self.pairs_per_row) if led_count else 0
         self.table.setRowCount(rows)
 
+        # Clear all existing cells to prevent old data from showing
+        self.table.clearContents()
+
         # Populate table
-        for idx, (led_id, led_info) in enumerate(self._sorted_items()):
+        for idx, (led_id, led_info) in enumerate(filtered_items):
             row = idx // self.pairs_per_row
             col_base = (idx % self.pairs_per_row) * 2
 
@@ -208,11 +371,21 @@ class StatusTable(QWidget):
         total_leds = sum(summary.values())
         parts = [f"{self._abbreviation(k)}:{v}" for k, v in summary.items() if v > 0]
         summary_text = " | ".join(parts) if parts else "No data"
-        self.summary_label.setText(f"Totals ({total_leds}): {summary_text}")
+
+        # Show filter status in summary
+        if self.active_filter is not None:
+            filter_abbr = self._abbreviation(self.active_filter)
+            self.summary_label.setText(f"Filtered: {led_count} {filter_abbr} LEDs | Total ({total_leds}): {summary_text}")
+        else:
+            self.summary_label.setText(f"Totals ({total_leds}): {summary_text}")
 
     def clear_table(self):
         """Clear all data from the table."""
         self.led_data = {}
+        self.active_filter = None
+        self._update_filter_button_styles()
+        self.filter_all_on_button.setVisible(False)
+        self.filter_all_off_button.setVisible(False)
         self.table.setRowCount(0)
 
     def get_summary(self):
@@ -238,8 +411,22 @@ class StatusTable(QWidget):
         return summary
 
     def _sorted_items(self):
+        """Iterate over all LED items in sorted order."""
         for led_id in self.sorted_ids:
             yield led_id, self.led_data[led_id]
+
+    def _filtered_items(self):
+        """Iterate over LED items matching the current filter."""
+        for led_id in self.sorted_ids:
+            led_info = self.led_data[led_id]
+            status_name = self._status_name(led_info)
+
+            # If no filter is active, show all
+            if self.active_filter is None:
+                yield led_id, led_info
+            # If filter is active, only show matching status
+            elif status_name == self.active_filter:
+                yield led_id, led_info
 
     @pyqtSlot()
     def set_all_on_state(self):
@@ -280,10 +467,13 @@ class StatusTable(QWidget):
         """Toggle LED on/off when either ID or status cell is clicked."""
         pair_index = column // 2
         led_index = row * self.pairs_per_row + pair_index
-        if led_index < 0 or led_index >= len(self.sorted_ids):
+
+        # Get the LED ID from filtered items (not sorted_ids, since table shows filtered view)
+        filtered_list = list(self._filtered_items())
+        if led_index < 0 or led_index >= len(filtered_list):
             return
 
-        led_id = self.sorted_ids[led_index]
+        led_id = filtered_list[led_index][0]  # Get LED ID from (led_id, led_info) tuple
         turn_on = led_id not in self.manual_on_leds
 
         if turn_on:
@@ -309,3 +499,37 @@ class StatusTable(QWidget):
 
         # Emit signal to actually control the LED
         self.led_toggle_requested.emit(led_id, turn_on)
+
+    def _turn_filtered_on(self):
+        """Turn on all LEDs in the current filter."""
+        if self.active_filter is None:
+            return
+
+        filtered_ids = [led_id for led_id, _ in self._filtered_items()]
+        print(f"StatusTable: Turning ON {len(filtered_ids)} filtered LEDs ({self.active_filter})")
+
+        for led_id in filtered_ids:
+            if led_id not in self.manual_on_leds:
+                self.manual_on_leds.add(led_id)
+                # Emit signal to actually control the LED
+                self.led_toggle_requested.emit(led_id, True)
+
+        # Refresh table to show updated visual state
+        self._refresh_table()
+
+    def _turn_filtered_off(self):
+        """Turn off all LEDs in the current filter."""
+        if self.active_filter is None:
+            return
+
+        filtered_ids = [led_id for led_id, _ in self._filtered_items()]
+        print(f"StatusTable: Turning OFF {len(filtered_ids)} filtered LEDs ({self.active_filter})")
+
+        for led_id in filtered_ids:
+            if led_id in self.manual_on_leds:
+                self.manual_on_leds.discard(led_id)
+                # Emit signal to actually control the LED
+                self.led_toggle_requested.emit(led_id, False)
+
+        # Refresh table to show updated visual state
+        self._refresh_table()

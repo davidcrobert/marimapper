@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self.monitor_thread = None
         self.init_thread = None
         self.current_view_id = 0
+        self.is_video_maximized = False
 
         # Create signals
         self.signals = MariMapperSignals()
@@ -120,21 +121,21 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout()
 
         # Left side: Video display and log (vertical splitter)
-        left_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.left_splitter = QSplitter(Qt.Orientation.Vertical)
 
         # Video display widget
         self.detector_widget = DetectorWidget()
-        left_splitter.addWidget(self.detector_widget)
+        self.left_splitter.addWidget(self.detector_widget)
 
         # Log widget
         self.log_widget = LogWidget()
-        left_splitter.addWidget(self.log_widget)
+        self.left_splitter.addWidget(self.log_widget)
 
         # Set initial sizes (video takes more space, log reasonably tall)
-        left_splitter.setSizes([600, 200])
+        self.left_splitter.setSizes([600, 200])
 
         # Right side: Control panel and status table
-        right_widget = QWidget()
+        self.right_widget = QWidget()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -150,17 +151,19 @@ class MainWindow(QMainWindow):
         right_layout.setStretch(0, 1)
         right_layout.setStretch(1, 3)
 
-        right_widget.setLayout(right_layout)
+        self.right_widget.setLayout(right_layout)
 
         # Add to main layout
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_splitter.addWidget(left_splitter)
-        main_splitter.addWidget(right_widget)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.addWidget(self.left_splitter)
+        self.main_splitter.addWidget(self.right_widget)
 
         # Set initial sizes (more width for controls + status table)
-        main_splitter.setSizes([700, 500])
+        self.main_splitter.setSizes([700, 500])
+        # Store the original sizes for restore
+        self.original_splitter_sizes = [700, 500]
 
-        main_layout.addWidget(main_splitter)
+        main_layout.addWidget(self.main_splitter)
         central_widget.setLayout(main_layout)
 
         # Menu bar
@@ -196,6 +199,9 @@ class MainWindow(QMainWindow):
         # Connect control panel to status table for visual state updates
         self.control_panel.all_off_requested.connect(self.status_table.set_all_off_state)
         self.control_panel.all_on_requested.connect(self.status_table.set_all_on_state)
+
+        # Connect detector widget signals
+        self.detector_widget.maximize_toggled.connect(self.toggle_video_maximize)
 
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
@@ -399,6 +405,29 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("LEDs: All on")
         except Exception as e:
             self.log_widget.log_error(f"Failed to turn LEDs on: {str(e)}")
+
+    @pyqtSlot(bool)
+    def toggle_video_maximize(self, maximize: bool):
+        """
+        Toggle video panel maximize/minimize.
+
+        Args:
+            maximize: True to maximize video, False to restore layout
+        """
+        self.is_video_maximized = maximize
+
+        if maximize:
+            # Hide the right panel and log widget
+            self.right_widget.hide()
+            self.log_widget.hide()
+            self.statusBar().showMessage("Video maximized (double-click or click button to restore)")
+        else:
+            # Restore all panels
+            self.right_widget.show()
+            self.log_widget.show()
+            # Restore splitter sizes
+            self.main_splitter.setSizes(self.original_splitter_sizes)
+            self.statusBar().showMessage("Video restored")
 
     @pyqtSlot(int)
     def on_scan_completed(self, view_id: int):

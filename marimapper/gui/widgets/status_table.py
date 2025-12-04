@@ -5,7 +5,7 @@ Displays the reconstruction status of each LED with color-coded rows.
 """
 
 import math
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
 from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QColor
 
@@ -54,6 +54,46 @@ class StatusTable(QWidget):
         self.summary_label = QLabel("Totals: (waiting for data)")
         self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.summary_label)
+
+        # Compact legend showing status colors and names
+        legend_layout = QHBoxLayout()
+        legend_layout.setSpacing(3)
+        legend_layout.setContentsMargins(4, 2, 4, 2)
+
+        status_info = [
+            ("R", "RECONSTRUCTED", "Reconstructed", "3D position found via SfM"),
+            ("I", "INTERPOLATED", "Interpolated", "Position calculated between detected LEDs"),
+            ("M", "MERGED", "Merged", "Duplicate detections merged"),
+            ("D", "DETECTED", "Detected", "Seen in 2D, waiting for 3D reconstruction"),
+            ("U", "UNRECONSTRUCTABLE", "Unreconstructable", "Cannot reconstruct 3D position"),
+            ("-", "NONE", "None", "Not yet detected"),
+        ]
+
+        for abbr, status, display_name, description in status_info:
+            # Color square
+            color_label = QLabel()
+            color_label.setFixedSize(10, 10)
+            color_label.setStyleSheet(f"background-color: {self.COLORS[status].name()}; border: 1px solid #999;")
+            color_label.setToolTip(description)
+
+            # Full name with abbreviation in brackets
+            text_label = QLabel(f"{display_name} ({abbr})")
+            text_label.setToolTip(description)
+            text_label.setStyleSheet("font-size: 9px;")
+
+            legend_layout.addWidget(color_label)
+            legend_layout.addWidget(text_label)
+            legend_layout.addSpacing(6)
+
+        legend_layout.addStretch()
+
+        # Wrap in a widget for styling
+        legend_widget = QWidget()
+        legend_widget.setLayout(legend_layout)
+        legend_widget.setStyleSheet("QWidget { background-color: #f5f5f5; border: 1px solid #ccc; border-radius: 3px; }")
+        legend_widget.setMaximumHeight(22)
+
+        layout.addWidget(legend_widget)
 
         # Create table
         self.table = QTableWidget()

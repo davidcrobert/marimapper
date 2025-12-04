@@ -23,18 +23,34 @@ logger = get_logger()
 
 
 class CameraCommand(Enum):
-    """Commands for controlling camera exposure."""
+    """Commands for controlling camera and detection parameters."""
     SET_DARK = "set_dark"
     SET_BRIGHT = "set_bright"
+    SET_THRESHOLD = "set_threshold"  # (command, threshold_value)
 
 
 def backend_black(backend):
-    buffer = [[0, 0, 0] for _ in range(backend.get_led_count())]
     try:
-        backend.set_leds(buffer)
-        return True
-    except AttributeError:
-        return False
+        # Preferred: dedicated blackout implementation on the backend
+        if hasattr(backend, "blackout"):
+            return backend.blackout()
+
+        # Fallback: bulk-set if supported
+        if hasattr(backend, "set_leds"):
+            buffer = [[0, 0, 0] for _ in range(backend.get_led_count())]
+            backend.set_leds(buffer)
+            return True
+
+        # Last resort: iterate per LED (can be slow on some backends)
+        if hasattr(backend, "set_led"):
+            for i in range(backend.get_led_count()):
+                backend.set_led(i, False)
+            return True
+
+    except Exception as e:
+        logger.debug(f"Failed to blacken backend: {e}")
+
+    return False
 
 
 def render_led_info(led_info: dict[int, LEDInfo], led_backend):
@@ -300,7 +316,15 @@ class DetectorProcess(Process):
                 # Handle camera control commands
                 if not self._camera_command_queue.empty():
                     try:
-                        command = self._camera_command_queue.get_nowait()
+                        cmd_data = self._camera_command_queue.get_nowait()
+
+                        # Handle tuple (command, value) or just command
+                        if isinstance(cmd_data, tuple):
+                            command, value = cmd_data
+                        else:
+                            command = cmd_data
+                            value = None
+
                         if command == CameraCommand.SET_DARK:
                             logger.info("GUI requested: Setting camera to DARK mode")
                             set_cam_dark(cam, self._dark_exposure)
@@ -309,6 +333,10 @@ class DetectorProcess(Process):
                             logger.info("GUI requested: Setting camera to BRIGHT mode")
                             set_cam_default(cam)
                             cam.eat()  # Flush frames
+                        elif command == CameraCommand.SET_THRESHOLD:
+                            if value is not None:
+                                logger.info(f"GUI requested: Setting threshold to {value}")
+                                self._threshold = value
                     except Exception as e:
                         logger.warning(f"Failed to process camera command: {e}")
 

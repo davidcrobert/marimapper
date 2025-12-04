@@ -12,8 +12,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QSpinBox,
+    QSlider,
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
 
 
 class ControlPanel(QWidget):
@@ -24,6 +25,7 @@ class ControlPanel(QWidget):
     stop_scan_requested = pyqtSignal()
     exposure_dark_requested = pyqtSignal()  # Set camera to dark mode
     exposure_bright_requested = pyqtSignal()  # Set camera to bright mode
+    threshold_changed = pyqtSignal(int)  # New threshold value (0-255)
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -97,6 +99,28 @@ class ControlPanel(QWidget):
 
         self.exposure_status_label = QLabel("Mode: Normal")
         camera_controls_layout.addWidget(self.exposure_status_label)
+
+        # Threshold slider
+        threshold_label = QLabel("Detection Threshold:")
+        camera_controls_layout.addWidget(threshold_label)
+
+        threshold_layout = QHBoxLayout()
+
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setMinimum(0)
+        self.threshold_slider.setMaximum(255)
+        self.threshold_slider.setValue(128)  # Default threshold
+        self.threshold_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.threshold_slider.setTickInterval(25)
+        self.threshold_slider.valueChanged.connect(self.on_threshold_changed)
+        threshold_layout.addWidget(self.threshold_slider)
+
+        self.threshold_value_label = QLabel("128")
+        self.threshold_value_label.setMinimumWidth(35)
+        self.threshold_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        threshold_layout.addWidget(self.threshold_value_label)
+
+        camera_controls_layout.addLayout(threshold_layout)
 
         camera_controls_group.setLayout(camera_controls_layout)
         layout.addWidget(camera_controls_group)
@@ -188,3 +212,8 @@ class ControlPanel(QWidget):
         """Handle bright mode button click."""
         self.exposure_status_label.setText("Mode: Bright (Normal)")
         self.exposure_bright_requested.emit()
+
+    def on_threshold_changed(self, value: int):
+        """Handle threshold slider change."""
+        self.threshold_value_label.setText(str(value))
+        self.threshold_changed.emit(value)

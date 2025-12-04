@@ -130,8 +130,8 @@ class MainWindow(QMainWindow):
         self.log_widget = LogWidget()
         left_splitter.addWidget(self.log_widget)
 
-        # Set initial sizes (video takes more space)
-        left_splitter.setSizes([600, 200])
+        # Set initial sizes (video takes more space, log shrunk)
+        left_splitter.setSizes([600, 100])
 
         # Right side: Control panel and status table
         right_widget = QWidget()
@@ -146,6 +146,10 @@ class MainWindow(QMainWindow):
         self.status_table = StatusTable()
         right_layout.addWidget(self.status_table)
 
+        # Give the status table most of the vertical space
+        right_layout.setStretch(0, 1)
+        right_layout.setStretch(1, 3)
+
         right_widget.setLayout(right_layout)
 
         # Add to main layout
@@ -153,8 +157,8 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(left_splitter)
         main_splitter.addWidget(right_widget)
 
-        # Set initial sizes (video/log takes more space than controls)
-        main_splitter.setSizes([900, 300])
+        # Set initial sizes (more width for controls + status table)
+        main_splitter.setSizes([700, 500])
 
         main_layout.addWidget(main_splitter)
         central_widget.setLayout(main_layout)
@@ -182,6 +186,7 @@ class MainWindow(QMainWindow):
         self.control_panel.stop_scan_requested.connect(self.stop_scan)
         self.control_panel.exposure_dark_requested.connect(self.set_exposure_dark)
         self.control_panel.exposure_bright_requested.connect(self.set_exposure_bright)
+        self.control_panel.threshold_changed.connect(self.set_threshold)
 
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
@@ -215,17 +220,26 @@ class MainWindow(QMainWindow):
         """
         self.scanner = scanner
         self.control_panel.set_led_count(led_count)
+
+        # Set threshold slider to match scanner's initial threshold
+        initial_threshold = self.scanner_args.threshold
+        self.control_panel.threshold_slider.setValue(initial_threshold)
+
         self.log_widget.log_success(f"Scanner initialized with {led_count} LEDs")
 
         # Create detector update queue and 3D info queue
         detector_update_queue = self.scanner.create_detector_update_queue()
         info_3d_queue = self.scanner.get_3d_info_queue()
 
+        self.log_widget.log_info(f"3D info queue created: {info_3d_queue is not None}")
+
         # Start status monitor thread
         self.monitor_thread = StatusMonitorThread(
             self.signals, self.frame_queue, detector_update_queue, info_3d_queue
         )
         self.monitor_thread.start()
+
+        self.log_widget.log_info("Monitor thread started, watching for 3D info updates...")
 
         # Log diagnostic information
         self.log_widget.log_info(f"Detector process alive: {scanner.detector.is_alive()}")
@@ -312,6 +326,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Camera: Bright mode")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set bright mode: {str(e)}")
+
+    @pyqtSlot(int)
+    def set_threshold(self, value: int):
+        """Set detection threshold."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            from marimapper.detector_process import CameraCommand
+            camera_queue = self.scanner.get_camera_command_queue()
+            camera_queue.put((CameraCommand.SET_THRESHOLD, value))
+            self.log_widget.log_info(f"Detection threshold set to {value}")
+            self.statusBar().showMessage(f"Threshold: {value}")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to set threshold: {str(e)}")
 
     @pyqtSlot(int)
     def on_scan_completed(self, view_id: int):

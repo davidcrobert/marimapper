@@ -114,8 +114,10 @@ class StatusMonitorThread(QThread):
                 if self.info_3d_queue is not None and not self.info_3d_queue.empty():
                     try:
                         led_info_dict = self.info_3d_queue.get_nowait()
+                        self.signals.log_message.emit("info", f"Received 3D info update: {len(led_info_dict)} LEDs")
                         self.signals.reconstruction_updated.emit(led_info_dict)
-                    except:
+                    except Exception as e:
+                        self.signals.log_message.emit("warning", f"Error reading 3D info queue: {e}")
                         pass  # Queue empty, ignore
 
                 # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)

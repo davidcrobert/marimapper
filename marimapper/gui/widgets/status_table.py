@@ -4,7 +4,7 @@ LED detection status table widget for MariMapper GUI.
 Displays the reconstruction status of each LED with color-coded rows.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QColor
 
@@ -22,6 +22,16 @@ class StatusTable(QWidget):
         "NONE": QColor(240, 240, 240),               # Light gray
     }
 
+    # Short labels to keep cells compact
+    ABBREVIATIONS = {
+        "RECONSTRUCTED": "R",
+        "INTERPOLATED": "I",
+        "MERGED": "M",
+        "DETECTED": "D",
+        "UNRECONSTRUCTABLE": "U",
+        "NONE": "-",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.led_data = {}  # LED ID -> LEDInfo (enum)
@@ -31,6 +41,11 @@ class StatusTable(QWidget):
         """Initialize the user interface."""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Summary label shows totals by status at a glance
+        self.summary_label = QLabel("Totals: (waiting for data)")
+        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.summary_label)
 
         # Create table
         self.table = QTableWidget()
@@ -42,6 +57,7 @@ class StatusTable(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(18)  # Smaller rows to fit more
 
         # Set column stretch
         header = self.table.horizontalHeader()
@@ -49,10 +65,23 @@ class StatusTable(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
         # Set column widths
-        self.table.setColumnWidth(0, 80)  # LED ID
+        self.table.setColumnWidth(0, 60)  # LED ID column slimmer
 
         layout.addWidget(self.table)
+        layout.setStretch(1, 1)  # Let table grab vertical space
         self.setLayout(layout)
+
+    def _status_name(self, led_info) -> str:
+        """Return the status name string for a LEDInfo-like object."""
+        if hasattr(led_info, "name"):
+            return led_info.name
+        if hasattr(led_info, "type") and hasattr(led_info.type, "name"):
+            return led_info.type.name
+        return str(led_info)
+
+    def _abbreviation(self, status: str) -> str:
+        """Return short label for a status name."""
+        return self.ABBREVIATIONS.get(status, status[:2].upper())
 
     @pyqtSlot(dict)
     def update_led_info(self, led_info_dict: dict):
@@ -62,6 +91,8 @@ class StatusTable(QWidget):
         Args:
             led_info_dict: Dictionary mapping LED ID (int) to LEDInfo (enum)
         """
+        print(f"StatusTable: update_led_info called with {len(led_info_dict)} LEDs")
+
         # Store the data
         self.led_data = led_info_dict
 
@@ -76,15 +107,24 @@ class StatusTable(QWidget):
             self.table.setItem(row, 0, id_item)
 
             # Status (led_info is an LEDInfo enum)
-            status_text = led_info.name
+            status_name = self._status_name(led_info)
+            status_text = self._abbreviation(status_name)
             status_item = QTableWidgetItem(status_text)
+            status_item.setToolTip(status_name.title())  # Full name on hover
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             # Set background color based on status
-            color = self.COLORS.get(status_text, self.COLORS["NONE"])
+            color = self.COLORS.get(status_name, self.COLORS["NONE"])
             status_item.setBackground(color)
 
             self.table.setItem(row, 1, status_item)
+
+        # Update summary totals
+        summary = self.get_summary()
+        total_leds = sum(summary.values())
+        parts = [f"{self._abbreviation(k)}:{v}" for k, v in summary.items() if v > 0]
+        summary_text = " | ".join(parts) if parts else "No data"
+        self.summary_label.setText(f"Totals ({total_leds}): {summary_text}")
 
     def clear_table(self):
         """Clear all data from the table."""
@@ -108,8 +148,7 @@ class StatusTable(QWidget):
         }
 
         for led_info in self.led_data.values():
-            status = led_info.type.name if hasattr(led_info, 'type') else "NONE"
-            if status in summary:
-                summary[status] += 1
+            status = self._status_name(led_info)
+            summary[status if status in summary else "NONE"] += 1
 
         return summary

@@ -20,6 +20,14 @@ class BaseQueue:
     def empty(self) -> bool:
         return self._queue.empty()
 
+    def get_nowait(self):
+        """Non-blocking get passthrough to underlying queue."""
+        return self._queue.get_nowait()
+
+    def put_nowait(self, item):
+        """Non-blocking put passthrough to underlying queue."""
+        return self._queue.put_nowait(item)
+
 
 class RequestDetectionsQueue(BaseQueue):
 

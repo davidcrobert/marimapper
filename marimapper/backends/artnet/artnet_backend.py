@@ -6,10 +6,10 @@ import argparse
 
 
 def artnet_set_args(parser):
-    parser.add_argument("--fixture_count", default=160, help="The Fixture count")
+    parser.add_argument("--fixture_count", default=216, help="The Fixture count")
     parser.add_argument("--base_universe", default=0, help="The base universe")
     parser.add_argument(
-        "--channels_per_fixture", default=4, help="The channels per fixture"
+        "--channels_per_fixture", default=1, help="The channels per fixture"
     )
     parser.add_argument(
         "--server", default="255.255.255.255", help="The server address"
@@ -18,13 +18,15 @@ def artnet_set_args(parser):
 
 
 def artnet_backend_factory(args: argparse.Namespace):
+    # Enable broadcast automatically when targeting the default broadcast address
+    effective_broadcast = args.broadcast or args.server == "255.255.255.255"
     return partial(
         Backend,
         args.fixture_count,
         args.base_universe,
         args.channels_per_fixture,
         args.server,
-        args.broadcast,
+        effective_broadcast,
     )
 
 
@@ -63,7 +65,8 @@ class Backend:
         self.server_address = server_address
         self.sequence = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if broadcast:
+        # Allow broadcast sockets so the default 255.255.255.255 target works on Windows
+        if broadcast or server_address == "255.255.255.255":
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     def get_led_count(self):
@@ -133,3 +136,14 @@ class Backend:
 
         # Send an ArtSync packet for good measure, although I'm not sure many devices actually use it.
         self.send_packet(self.get_artsync_packet())
+
+    def blackout(self) -> bool:
+        """Turn off all fixtures in a single pass."""
+        universe_count = (self.get_led_count() * self.channels_per_fixture + 511) // 512
+        channels = [0] * (512 * universe_count)
+        universes = [channels[u * 512 : (u + 1) * 512] for u in range(universe_count)]
+
+        for u in range(universe_count):
+            self.send_universe(u, universes[u])
+        self.send_packet(self.get_artsync_packet())
+        return True

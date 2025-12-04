@@ -21,6 +21,7 @@ from marimapper.gui.signals import MariMapperSignals
 from marimapper.gui.widgets.detector_widget import DetectorWidget
 from marimapper.gui.widgets.control_panel import ControlPanel
 from marimapper.gui.widgets.log_widget import LogWidget
+from marimapper.gui.widgets.status_table import StatusTable
 from marimapper.gui.worker import StatusMonitorThread
 
 
@@ -132,14 +133,25 @@ class MainWindow(QMainWindow):
         # Set initial sizes (video takes more space)
         left_splitter.setSizes([600, 200])
 
-        # Right side: Control panel
+        # Right side: Control panel and status table
+        right_widget = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
         self.control_panel = ControlPanel()
         self.control_panel.start_button.setEnabled(False)  # Disable until scanner ready
+        right_layout.addWidget(self.control_panel)
+
+        # LED status table
+        self.status_table = StatusTable()
+        right_layout.addWidget(self.status_table)
+
+        right_widget.setLayout(right_layout)
 
         # Add to main layout
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.addWidget(left_splitter)
-        main_splitter.addWidget(self.control_panel)
+        main_splitter.addWidget(right_widget)
 
         # Set initial sizes (video/log takes more space than controls)
         main_splitter.setSizes([900, 300])
@@ -176,6 +188,7 @@ class MainWindow(QMainWindow):
         self.signals.log_message.connect(self.log_widget.add_message)
         self.signals.scan_completed.connect(self.on_scan_completed)
         self.signals.scan_failed.connect(self.on_scan_failed)
+        self.signals.reconstruction_updated.connect(self.status_table.update_led_info)
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -204,12 +217,13 @@ class MainWindow(QMainWindow):
         self.control_panel.set_led_count(led_count)
         self.log_widget.log_success(f"Scanner initialized with {led_count} LEDs")
 
-        # Create detector update queue
+        # Create detector update queue and 3D info queue
         detector_update_queue = self.scanner.create_detector_update_queue()
+        info_3d_queue = self.scanner.get_3d_info_queue()
 
         # Start status monitor thread
         self.monitor_thread = StatusMonitorThread(
-            self.signals, self.frame_queue, detector_update_queue
+            self.signals, self.frame_queue, detector_update_queue, info_3d_queue
         )
         self.monitor_thread.start()
 

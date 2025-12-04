@@ -25,6 +25,7 @@ class StatusMonitorThread(QThread):
         signals: MariMapperSignals,
         frame_queue: Queue,
         detector_update_queue: Queue2D,
+        info_3d_queue=None,
     ):
         """
         Initialize the status monitor thread.
@@ -33,11 +34,13 @@ class StatusMonitorThread(QThread):
             signals: MariMapperSignals object for emitting Qt signals
             frame_queue: Queue containing video frames from detector
             detector_update_queue: Queue2D for detection status updates
+            info_3d_queue: Queue3DInfo for 3D reconstruction status updates
         """
         super().__init__()
         self.signals = signals
         self.frame_queue = frame_queue
         self.detector_update_queue = detector_update_queue
+        self.info_3d_queue = info_3d_queue
         self.running = True
 
     def run(self):
@@ -106,6 +109,14 @@ class StatusMonitorThread(QThread):
 
                     except:
                         pass  # Queue empty or other error, ignore
+
+                # Poll 3D info queue for reconstruction status updates
+                if self.info_3d_queue is not None and not self.info_3d_queue.empty():
+                    try:
+                        led_info_dict = self.info_3d_queue.get_nowait()
+                        self.signals.reconstruction_updated.emit(led_info_dict)
+                    except:
+                        pass  # Queue empty, ignore
 
                 # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)
                 if loop_count == 90 and frame_count == 0:

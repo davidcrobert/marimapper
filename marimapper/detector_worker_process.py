@@ -15,6 +15,7 @@ from multiprocessing import Process, Queue, get_logger
 import time
 import queue
 from typing import List, Optional
+import numpy as np
 
 from marimapper.camera import Camera
 from marimapper.detector import set_cam_dark, set_cam_default, find_led_in_image, draw_led_detections
@@ -86,6 +87,10 @@ class DetectorWorkerProcess(Process):
         self.detections_attempted = 0
         self.detections_successful = 0
 
+        # Mask state
+        self._mask = None  # numpy array (H, W) uint8
+        self._mask_resolution = None  # (height, width) of original mask
+
     def add_output_queue(self, queue: Queue2D):
         """Add an output queue for sending detection results (e.g., to SFM)."""
         self._output_queues.append(queue)
@@ -96,7 +101,9 @@ class DetectorWorkerProcess(Process):
         Similar to find_led() but with camera-specific window.
         """
         image = cam.read()
-        results = find_led_in_image(image, self.threshold)
+        results = find_led_in_image(
+            image, self.threshold, self._mask, self._mask_resolution
+        )
 
         if self.display:
             rendered_image = draw_led_detections(image, results)
@@ -285,6 +292,27 @@ class DetectorWorkerProcess(Process):
                         logger.warning(f"Camera {self.camera_id}: Failed to reset exposure after scan: {e}")
                     self._in_scan = False
                     # keep looping for idle preview
+
+                elif msg_type == "SET_MASK":
+                    # Handle mask update command
+                    mask_dict = msg[1] if len(msg) > 1 else None
+                    if mask_dict is not None and isinstance(mask_dict, dict):
+                        mask_data = mask_dict.get("mask")
+                        mask_res = mask_dict.get("resolution")
+
+                        if mask_data is None:
+                            # Clear mask
+                            self._mask = None
+                            self._mask_resolution = None
+                            logger.info(f"Camera {self.camera_id}: Detection mask cleared")
+                        else:
+                            self._mask = mask_data
+                            self._mask_resolution = mask_res
+                            masked_pixels = np.sum(mask_data == 0)
+                            logger.info(
+                                f"Camera {self.camera_id}: Detection mask set: "
+                                f"resolution {mask_res}, masked pixels: {masked_pixels}"
+                            )
 
                 elif msg_type == "EXIT":
                     logger.info(f"Camera {self.camera_id}: Received EXIT")

@@ -1,6 +1,7 @@
 from multiprocessing import get_logger, Process, Queue, Event
 import time
 from enum import Enum
+import numpy as np
 from marimapper.detector import (
     show_image,
     set_cam_default,
@@ -31,6 +32,7 @@ class CameraCommand(Enum):
     ALL_ON = "all_on"
     SET_LED = "set_led"  # (command, (led_id, on_bool))
     SET_LEDS_BULK = "set_leds_bulk"  # (command, [(led_id, on_bool), ...])
+    SET_MASK = "set_mask"  # (command, {'mask': array, 'resolution': tuple})
 
 
 def backend_black(backend):
@@ -104,6 +106,8 @@ def detect_leds(
     display: bool,
     output_queues: list[Queue2D],
     frame_queue=None,
+    mask=None,
+    mask_resolution=None,
 ):
     leds = []
     for led_id in range(led_id_from, led_id_to):
@@ -116,6 +120,8 @@ def detect_leds(
             threshold,
             display,
             frame_queue,
+            mask,
+            mask_resolution,
         )
 
         for queue in output_queues:
@@ -161,6 +167,9 @@ class DetectorProcess(Process):
         # When a GUI is connected (frame_queue provided), avoid pushing 3D color overlays to the backend
         # so LEDs stay off/controlled only by explicit GUI actions.
         self._render_backend_info = frame_queue is None
+        # Mask state
+        self._mask = None  # numpy array (H, W) uint8
+        self._mask_resolution = None  # (height, width) of original mask
 
     def get_input_3d_info_queue(self):
         return self._input_3d_info_queue
@@ -248,7 +257,17 @@ class DetectorProcess(Process):
                 set_cam_dark(cam, self._dark_exposure)
 
                 # Firstly, if there are leds visible, break out
-                if find_led(cam, self._threshold, self._display, self._frame_queue) is not None:
+                if (
+                    find_led(
+                        cam,
+                        self._threshold,
+                        self._display,
+                        self._frame_queue,
+                        self._mask,
+                        self._mask_resolution,
+                    )
+                    is not None
+                ):
                     logger.error(
                         "Detector process can detect an LED when no LEDs should be visible"
                     )
@@ -268,6 +287,8 @@ class DetectorProcess(Process):
                     self._display,
                     self._output_queues,
                     self._frame_queue,
+                    self._mask,
+                    self._mask_resolution,
                 )
 
                 if leds is not None and len(leds) > 0:
@@ -285,6 +306,8 @@ class DetectorProcess(Process):
                             self._threshold,
                             self._display,
                             self._frame_queue,
+                            self._mask,
+                            self._mask_resolution,
                         )
                         if led_current is not None:
                             distance = get_distance(led_current, led_first)
@@ -426,6 +449,24 @@ class DetectorProcess(Process):
                                 elif hasattr(led_backend, 'set_led'):
                                     for led_id, on_state in value:
                                         led_backend.set_led(led_id, on_state)
+                        elif command == CameraCommand.SET_MASK:
+                            if value is not None and isinstance(value, dict):
+                                mask_data = value.get('mask')
+                                mask_res = value.get('resolution')
+
+                                if mask_data is None:
+                                    # Clear mask
+                                    self._mask = None
+                                    self._mask_resolution = None
+                                    logger.info("Detection mask cleared")
+                                else:
+                                    self._mask = mask_data
+                                    self._mask_resolution = mask_res
+                                    masked_pixels = np.sum(mask_data == 0)
+                                    logger.info(
+                                        f"Detection mask set: resolution {mask_res}, "
+                                        f"masked pixels: {masked_pixels}"
+                                    )
                     except Exception as e:
                         logger.warning(f"Failed to process camera command: {e}")
 

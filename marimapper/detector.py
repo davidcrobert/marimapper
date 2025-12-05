@@ -22,10 +22,33 @@ def contour_brightness(image: np.ndarray, contour: np.ndarray) -> int:
     return cv2.sumElems(masked_image)
 
 
-def find_led_in_image(image: np.ndarray, threshold: int = 128) -> Optional[Point2D]:
+def find_led_in_image(
+    image: np.ndarray,
+    threshold: int = 128,
+    mask: Optional[np.ndarray] = None,
+    mask_resolution: Optional[tuple] = None,
+) -> Optional[Point2D]:
 
     if len(image.shape) > 2:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply mask to ignore painted areas
+    if mask is not None:
+        img_height, img_width = image.shape
+        mask_height, mask_width = (
+            mask_resolution if mask_resolution else mask.shape
+        )
+
+        # Scale mask to match current image resolution if needed
+        if (img_height, img_width) != (mask_height, mask_width):
+            scaled_mask = cv2.resize(
+                mask, (img_width, img_height), interpolation=cv2.INTER_NEAREST
+            )
+        else:
+            scaled_mask = mask
+
+        # Apply mask: 0 = ignore (painted), 255 = detect
+        image = cv2.bitwise_and(image, image, mask=scaled_mask)
 
     _, image_thresh = cv2.threshold(image, threshold, 255, cv2.THRESH_TOZERO)
 
@@ -129,11 +152,16 @@ def set_cam_dark(cam: Camera, exposure: int) -> bool:
 
 
 def find_led(
-    cam: Camera, threshold: int = 128, display: bool = True, frame_queue=None
+    cam: Camera,
+    threshold: int = 128,
+    display: bool = True,
+    frame_queue=None,
+    mask=None,
+    mask_resolution=None,
 ) -> Optional[Point2D]:
 
     image = cam.read()
-    results = find_led_in_image(image, threshold)
+    results = find_led_in_image(image, threshold, mask, mask_resolution)
 
     if display:
         rendered_image = draw_led_detections(image, results)
@@ -151,13 +179,15 @@ def enable_and_find_led(
     threshold: int,
     display: bool = False,
     frame_queue=None,
+    mask=None,
+    mask_resolution=None,
 ) -> Optional[LED2D]:
 
     darkness_timeout_seconds = 1.25
-    
+
     # First wait for no leds to be visible, this should always be false
     start = time.time()
-    while find_led(cam, threshold, display, frame_queue) is not None:
+    while find_led(cam, threshold, display, frame_queue, mask, mask_resolution) is not None:
         if time.time() - start > darkness_timeout_seconds:
             logging.warning(
                 f"Detector can't start detecting led {led_id} as an led is already visible"
@@ -174,7 +204,7 @@ def enable_and_find_led(
     while (
         point is None and time.time() < response_time_start + timeout_controller.timeout
     ):
-        point = find_led(cam, threshold, display, frame_queue)
+        point = find_led(cam, threshold, display, frame_queue, mask, mask_resolution)
 
     led_backend.set_led(led_id, False)
 
@@ -184,7 +214,7 @@ def enable_and_find_led(
     timeout_controller.add_response_time(time.time() - response_time_start)
 
     start = time.time()
-    while find_led(cam, threshold, display, frame_queue) is not None:
+    while find_led(cam, threshold, display, frame_queue, mask, mask_resolution) is not None:
         if time.time() - start > darkness_timeout_seconds:
             logging.warning(
                 f"Detector can't stop detecting led {led_id} as an led is already visible, retrying backend..."

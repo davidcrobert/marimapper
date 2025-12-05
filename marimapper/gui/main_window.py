@@ -6,6 +6,9 @@ the Scanner instance.
 """
 
 from multiprocessing import Queue
+from pathlib import Path
+import cv2
+import json
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -17,6 +20,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QThread, pyqtSignal
 
 from marimapper.scanner import Scanner
+from marimapper.detector_process import CameraCommand
 from marimapper.gui.signals import MariMapperSignals
 from marimapper.gui.widgets.detector_widget import DetectorWidget
 from marimapper.gui.widgets.control_panel import ControlPanel
@@ -98,6 +102,12 @@ class MainWindow(QMainWindow):
         self.init_thread = None
         self.current_view_id = 0
         self.is_video_maximized = False
+
+        # Mask management (per-camera)
+        self.current_masks = {}  # {camera_index: numpy_array}
+        self.mask_resolutions = {}  # {camera_index: (height, width)}
+        self.active_camera_index = 0  # Currently displayed camera for mask editing
+        self.camera_count = 1  # Number of cameras (1 for single, N for multi)
 
         # Create signals
         self.signals = MariMapperSignals()
@@ -204,6 +214,22 @@ class MainWindow(QMainWindow):
         # Connect detector widget signals
         self.detector_widget.maximize_toggled.connect(self.toggle_video_maximize)
 
+        # Connect mask control signals
+        self.control_panel.paint_mode_toggled.connect(
+            self.detector_widget.set_painting_mode
+        )
+        self.control_panel.brush_size_changed.connect(self.detector_widget.set_brush_size)
+        self.control_panel.mask_visibility_toggled.connect(
+            self.detector_widget.set_mask_visibility
+        )
+        self.control_panel.mask_clear_requested.connect(self.on_clear_mask)
+        self.control_panel.mask_save_requested.connect(self.on_save_mask)
+        self.control_panel.mask_load_requested.connect(self.on_load_mask)
+        self.control_panel.camera_selected.connect(self.on_camera_selected)
+
+        # Connect detector widget mask signals
+        self.detector_widget.mask_updated.connect(self.on_mask_updated)
+
         # Connect worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
         self.signals.log_message.connect(self.log_widget.add_message)
@@ -264,6 +290,23 @@ class MainWindow(QMainWindow):
         # Enable controls now that scanner is ready
         self.control_panel.start_button.setEnabled(True)
         self.statusBar().showMessage("Scanner ready")
+
+        # Detect camera count for multi-camera support
+        if hasattr(scanner, "detector_workers") and scanner.detector_workers:
+            # Multi-camera mode
+            self.camera_count = len(scanner.detector_workers)
+            self.log_widget.log_info(f"Multi-camera mode detected: {self.camera_count} cameras")
+        else:
+            # Single camera mode
+            self.camera_count = 1
+            self.log_widget.log_info("Single camera mode")
+
+        # Initialize camera selector if multi-camera
+        if self.camera_count > 1:
+            self.control_panel.set_camera_count(self.camera_count)
+
+        # Auto-load saved masks
+        self.auto_load_masks()
 
     @pyqtSlot(str)
     def on_scanner_error(self, error_msg):
@@ -485,6 +528,211 @@ class MainWindow(QMainWindow):
             "<p>This GUI interface provides an intuitive way to capture and map LED positions.</p>"
             "<p><b>Phase 1:</b> Basic GUI with video display and scan controls</p>",
         )
+
+    @pyqtSlot(object)
+    def on_mask_updated(self, mask_numpy):
+        """Handle mask update from painting."""
+        if mask_numpy is None:
+            return
+
+        # Store mask for active camera
+        self.current_masks[self.active_camera_index] = mask_numpy
+
+        # Get current video resolution from detector widget
+        if self.detector_widget.video_label.pixmap():
+            pixmap = self.detector_widget.video_label.pixmap()
+            self.mask_resolutions[self.active_camera_index] = (
+                pixmap.height(),
+                pixmap.width(),
+            )
+
+        # Send to appropriate detector process/worker
+        self.send_mask_to_detector(self.active_camera_index)
+
+        self.log_widget.log_info(
+            f"Mask updated for camera {self.active_camera_index}"
+        )
+
+    @pyqtSlot()
+    def on_clear_mask(self):
+        """Clear the current mask."""
+        # Clear mask for active camera
+        self.current_masks.pop(self.active_camera_index, None)
+        self.mask_resolutions.pop(self.active_camera_index, None)
+        self.detector_widget.set_mask_from_numpy(None)
+
+        # Send clear command to detector
+        self.send_mask_to_detector(self.active_camera_index)
+
+        self.log_widget.log_success(
+            f"Mask cleared for camera {self.active_camera_index}"
+        )
+
+    @pyqtSlot()
+    def on_save_mask(self):
+        """Save mask to file."""
+        if self.active_camera_index not in self.current_masks:
+            self.log_widget.log_warning("No mask to save")
+            return
+
+        try:
+            # Get mask file path for active camera
+            mask_file_path = (
+                Path(self.scanner_args.output_dir)
+                / f"detection_mask_{self.active_camera_index}.png"
+            )
+
+            # Save as PNG (lossless, good for binary data)
+            cv2.imwrite(
+                str(mask_file_path), self.current_masks[self.active_camera_index]
+            )
+
+            # Also save resolution metadata
+            meta_path = mask_file_path.with_suffix(".json")
+            with open(meta_path, "w") as f:
+                json.dump(
+                    {
+                        "resolution": self.mask_resolutions.get(
+                            self.active_camera_index
+                        ),
+                        "camera_index": self.active_camera_index,
+                    },
+                    f,
+                )
+
+            self.log_widget.log_success(
+                f"Mask saved to {mask_file_path.name}"
+            )
+
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to save mask: {e}")
+
+    @pyqtSlot()
+    def on_load_mask(self):
+        """Load mask from file."""
+        try:
+            # Get mask file path for active camera
+            mask_file_path = (
+                Path(self.scanner_args.output_dir)
+                / f"detection_mask_{self.active_camera_index}.png"
+            )
+
+            if not mask_file_path.exists():
+                self.log_widget.log_warning(
+                    f"No mask file found for camera {self.active_camera_index}"
+                )
+                return
+
+            # Load mask image
+            mask = cv2.imread(str(mask_file_path), cv2.IMREAD_GRAYSCALE)
+
+            # Load resolution metadata if available
+            meta_path = mask_file_path.with_suffix(".json")
+            if meta_path.exists():
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                    self.mask_resolutions[self.active_camera_index] = tuple(
+                        meta["resolution"]
+                    )
+            else:
+                self.mask_resolutions[self.active_camera_index] = (
+                    mask.shape[0],
+                    mask.shape[1],
+                )
+
+            self.current_masks[self.active_camera_index] = mask
+
+            # Update detector widget
+            self.detector_widget.set_mask_from_numpy(mask)
+
+            # Send to detector process
+            self.send_mask_to_detector(self.active_camera_index)
+
+            self.log_widget.log_success(
+                f"Mask loaded from {mask_file_path.name}"
+            )
+
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to load mask: {e}")
+
+    @pyqtSlot(int)
+    def on_camera_selected(self, camera_index: int):
+        """Switch active camera for mask editing."""
+        self.active_camera_index = camera_index
+
+        # Load that camera's mask into DetectorWidget
+        if camera_index in self.current_masks:
+            self.detector_widget.set_mask_from_numpy(
+                self.current_masks[camera_index]
+            )
+            self.log_widget.log_info(
+                f"Loaded mask for camera {camera_index}"
+            )
+        else:
+            self.detector_widget.set_mask_from_numpy(None)
+            self.log_widget.log_info(
+                f"No mask for camera {camera_index}"
+            )
+
+    def send_mask_to_detector(self, camera_index: int):
+        """Send mask to detector process via CameraCommand."""
+        if self.scanner is None:
+            return
+
+        try:
+            # Get mask data for this camera
+            mask_data = self.current_masks.get(camera_index)
+            mask_res = self.mask_resolutions.get(camera_index)
+
+            # Prepare mask dict (None mask_data will clear mask)
+            mask_dict = {"mask": mask_data, "resolution": mask_res}
+
+            # For single-camera: send to DetectorProcess camera_command_queue
+            if self.camera_count == 1:
+                camera_queue = self.scanner.get_camera_command_queue()
+                camera_queue.put((CameraCommand.SET_MASK, mask_dict))
+                self.log_widget.log_info("Mask sent to detector process")
+            else:
+                # For multi-camera: send to specific DetectorWorkerProcess
+                worker_queue = self.scanner.get_worker_command_queue(camera_index)
+                if worker_queue is not None:
+                    worker_queue.put(("SET_MASK", mask_dict))
+                    self.log_widget.log_info(
+                        f"Mask sent to camera {camera_index} worker"
+                    )
+                else:
+                    self.log_widget.log_error(
+                        f"Failed to get command queue for camera {camera_index}"
+                    )
+
+        except Exception as e:
+            self.log_widget.log_error(
+                f"Failed to send mask to detector: {e}"
+            )
+
+    def auto_load_masks(self):
+        """Auto-load saved masks for all cameras on startup."""
+        for camera_index in range(self.camera_count):
+            mask_file_path = (
+                Path(self.scanner_args.output_dir)
+                / f"detection_mask_{camera_index}.png"
+            )
+
+            if mask_file_path.exists():
+                self.log_widget.log_info(
+                    f"Auto-loading mask for camera {camera_index}..."
+                )
+                # Temporarily set active camera to load the mask
+                old_active = self.active_camera_index
+                self.active_camera_index = camera_index
+                self.on_load_mask()
+                self.active_camera_index = old_active
+
+        # Ensure the active camera's mask is displayed
+        if self.active_camera_index in self.current_masks:
+            self.detector_widget.set_mask_from_numpy(
+                self.current_masks[self.active_camera_index]
+            )
 
     def closeEvent(self, event):
         """Handle window close event - clean up scanner and threads."""

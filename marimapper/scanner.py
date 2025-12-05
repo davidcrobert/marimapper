@@ -273,6 +273,30 @@ class Scanner:
         else:
             return self.detector.get_camera_command_queue()
 
+    def get_worker_command_queue(self, camera_index: int):
+        """
+        Return the command queue for a specific worker in multi-camera mode.
+
+        Args:
+            camera_index: Index of the camera worker (0, 1, 2, ...)
+
+        Returns:
+            Queue for sending commands to the specified worker, or None if not in multi-camera mode
+        """
+        if not self.multi_camera_mode:
+            logger.warning("get_worker_command_queue() only works in multi-camera mode")
+            return None
+
+        if self.coordinator is None:
+            logger.error("Coordinator not initialized")
+            return None
+
+        try:
+            return self.coordinator.get_command_queue(camera_index)
+        except Exception as e:
+            logger.error(f"Failed to get command queue for camera {camera_index}: {e}")
+            return None
+
     def close(self):
         logger.debug("scanner closing")
 

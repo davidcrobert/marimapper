@@ -190,11 +190,29 @@ class DetectorWidget(QWidget):
 
     def paint_mask_at(self, pos: QPoint):
         """Paint circular brush stroke at position."""
+        # Get current pixmap size (the actual video frame size)
+        if self.base_frame is None or self.base_frame.isNull():
+            return
+
+        current_size = self.base_frame.size()
+
         if self.mask_overlay is None:
-            # Initialize overlay matching video label size
-            size = self.video_label.size()
-            self.mask_overlay = QPixmap(size)
+            # Initialize overlay matching current video frame size
+            self.mask_overlay = QPixmap(current_size)
             self.mask_overlay.fill(Qt.GlobalColor.transparent)
+        elif self.mask_overlay.size() != current_size:
+            # Resize existing mask overlay to match new video frame size
+            old_overlay = self.mask_overlay
+            self.mask_overlay = old_overlay.scaled(
+                current_size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        # Map mouse position to mask overlay coordinates, accounting for letterboxing
+        mapped_pos = self._map_label_to_pixmap_coords(pos)
+        if mapped_pos is None:
+            return  # Click was in letterbox area
 
         painter = QPainter(self.mask_overlay)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -204,8 +222,8 @@ class DetectorWidget(QWidget):
         painter.setBrush(brush_color)
         painter.setPen(Qt.PenStyle.NoPen)
 
-        # Draw circle at position
-        painter.drawEllipse(pos, self.brush_size, self.brush_size)
+        # Draw circle at mapped position
+        painter.drawEllipse(mapped_pos, self.brush_size, self.brush_size)
         painter.end()
 
         # Redraw video with overlay
@@ -213,8 +231,15 @@ class DetectorWidget(QWidget):
 
     def paint_mask_line(self, start: QPoint, end: QPoint):
         """Paint line between two points for smooth stroke."""
-        if self.mask_overlay is None:
+        if self.mask_overlay is None or self.base_frame is None or self.base_frame.isNull():
             return
+
+        # Map mouse positions to mask overlay coordinates, accounting for letterboxing
+        mapped_start = self._map_label_to_pixmap_coords(start)
+        mapped_end = self._map_label_to_pixmap_coords(end)
+
+        if mapped_start is None or mapped_end is None:
+            return  # One or both points in letterbox area
 
         painter = QPainter(self.mask_overlay)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -231,7 +256,7 @@ class DetectorWidget(QWidget):
             )
         )
 
-        painter.drawLine(start, end)
+        painter.drawLine(mapped_start, mapped_end)
         painter.end()
 
         self.update_display()
@@ -305,6 +330,52 @@ class DetectorWidget(QWidget):
         painter.end()
 
         self.update_display()
+
+    def _map_label_to_pixmap_coords(self, label_pos: QPoint):
+        """
+        Map coordinates from video_label to pixmap coordinates, accounting for letterboxing.
+
+        Args:
+            label_pos: Position relative to video_label
+
+        Returns:
+            QPoint in pixmap coordinates, or None if position is in letterbox area
+        """
+        if self.base_frame is None or self.base_frame.isNull():
+            return None
+
+        label_size = self.video_label.size()
+        pixmap_size = self.base_frame.size()
+
+        # Calculate how the pixmap is scaled to fit in the label (maintaining aspect ratio)
+        label_aspect = label_size.width() / label_size.height()
+        pixmap_aspect = pixmap_size.width() / pixmap_size.height()
+
+        if pixmap_aspect > label_aspect:
+            # Pixmap is wider - letterboxing on top/bottom
+            scaled_width = label_size.width()
+            scaled_height = int(label_size.width() / pixmap_aspect)
+            offset_x = 0
+            offset_y = (label_size.height() - scaled_height) // 2
+        else:
+            # Pixmap is taller - letterboxing on left/right
+            scaled_width = int(label_size.height() * pixmap_aspect)
+            scaled_height = label_size.height()
+            offset_x = (label_size.width() - scaled_width) // 2
+            offset_y = 0
+
+        # Check if click is within the actual video area (not letterbox)
+        video_x = label_pos.x() - offset_x
+        video_y = label_pos.y() - offset_y
+
+        if video_x < 0 or video_x >= scaled_width or video_y < 0 or video_y >= scaled_height:
+            return None  # Click was in letterbox area
+
+        # Map from scaled video coordinates to pixmap coordinates
+        pixmap_x = int(video_x * pixmap_size.width() / scaled_width)
+        pixmap_y = int(video_y * pixmap_size.height() / scaled_height)
+
+        return QPoint(pixmap_x, pixmap_y)
 
     def set_painting_mode(self, enabled: bool):
         """Enable or disable painting mode."""

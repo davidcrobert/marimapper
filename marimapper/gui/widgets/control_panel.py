@@ -76,18 +76,31 @@ class ControlPanel(QWidget):
         led_range_group.setLayout(led_range_layout)
         layout.addWidget(led_range_group)
 
-        # View Info Group
+        # Horizontal layout for View Info and Scan Controls (side by side)
+        info_scan_layout = QHBoxLayout()
+
+        # View Info Group (horizontal layout)
         view_info_group = QGroupBox("View Information")
         view_info_layout = QVBoxLayout()
 
-        self.view_count_label = QLabel(f"Views captured: {self.view_count}")
-        view_info_layout.addWidget(self.view_count_label)
+        # First row: Views captured
+        views_layout = QHBoxLayout()
+        views_layout.addWidget(QLabel("Views:"))
+        self.view_count_label = QLabel(str(self.view_count))
+        views_layout.addWidget(self.view_count_label)
+        views_layout.addStretch()
+        view_info_layout.addLayout(views_layout)
 
-        self.led_count_label = QLabel(f"Total LEDs: {self.led_count}")
-        view_info_layout.addWidget(self.led_count_label)
+        # Second row: Total LEDs
+        leds_layout = QHBoxLayout()
+        leds_layout.addWidget(QLabel("Total LEDs:"))
+        self.led_count_label = QLabel(str(self.led_count))
+        leds_layout.addWidget(self.led_count_label)
+        leds_layout.addStretch()
+        view_info_layout.addLayout(leds_layout)
 
         view_info_group.setLayout(view_info_layout)
-        layout.addWidget(view_info_group)
+        info_scan_layout.addWidget(view_info_group)
 
         # Camera Controls
         camera_controls_group = QGroupBox("Camera Controls")
@@ -232,25 +245,34 @@ class ControlPanel(QWidget):
         mask_controls_group.setLayout(mask_controls_layout)
         layout.addWidget(mask_controls_group)
 
-        # Scan Controls
+        # Scan Controls (placed next to View Info, buttons side-by-side)
         scan_controls_group = QGroupBox("Scan Controls")
         scan_controls_layout = QVBoxLayout()
 
-        self.start_button = QPushButton("Start Scan")
+        # Buttons in horizontal layout
+        buttons_layout = QHBoxLayout()
+        self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self.on_start_scan)
         self.start_button.setEnabled(True)
-        scan_controls_layout.addWidget(self.start_button)
+        buttons_layout.addWidget(self.start_button)
 
         self.stop_button = QPushButton("Stop")
         self.stop_button.clicked.connect(self.on_stop_scan)
         self.stop_button.setEnabled(False)
-        scan_controls_layout.addWidget(self.stop_button)
+        buttons_layout.addWidget(self.stop_button)
 
+        scan_controls_layout.addLayout(buttons_layout)
+
+        # Status label below buttons
         self.status_label = QLabel("Status: Ready")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         scan_controls_layout.addWidget(self.status_label)
 
         scan_controls_group.setLayout(scan_controls_layout)
-        layout.addWidget(scan_controls_group)
+        info_scan_layout.addWidget(scan_controls_group)
+
+        # Add the horizontal layout (View Info + Scan Controls) to main layout
+        layout.addLayout(info_scan_layout)
 
         # Add stretch to push everything to the top
         layout.addStretch()
@@ -285,14 +307,14 @@ class ControlPanel(QWidget):
     def set_led_count(self, count: int):
         """Update the LED count."""
         self.led_count = count
-        self.led_count_label.setText(f"Total LEDs: {count}")
+        self.led_count_label.setText(str(count))
         self.led_to_spinbox.setValue(count)
         self.led_to_spinbox.setMaximum(count)
 
     def scan_completed(self):
         """Called when a scan completes successfully."""
         self.view_count += 1
-        self.view_count_label.setText(f"Views captured: {self.view_count}")
+        self.view_count_label.setText(str(self.view_count))
         self.is_scanning = False
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
@@ -308,7 +330,7 @@ class ControlPanel(QWidget):
     def reset_view_count(self):
         """Reset the view counter."""
         self.view_count = 0
-        self.view_count_label.setText(f"Views captured: {self.view_count}")
+        self.view_count_label.setText(str(self.view_count))
 
     def on_exposure_dark(self):
         """Handle dark mode button click."""

@@ -1,7 +1,8 @@
 import os
-from marimapper.led import Point2D, LED3D, LED2D
+from marimapper.led import Point2D, Point3D, LED3D, LED2D
 import typing
 from pathlib import Path
+import numpy as np
 
 
 def load_detections(filename: Path, view_id) -> typing.Optional[list[LED2D]]:
@@ -63,6 +64,64 @@ def write_2d_leds_to_file(leds: list[LED2D], filename: Path):
 
     with open(filename, "w") as f:
         f.write("\n".join(lines))
+
+
+def load_3d_leds_from_file(filename: Path) -> typing.Optional[list[LED3D]]:
+    """Load 3D LED data from CSV file.
+
+    Args:
+        filename: Path to led_map_3d.csv file
+
+    Returns:
+        List of LED3D objects, or None if file doesn't exist or is invalid
+    """
+    if not os.path.exists(filename):
+        return None
+
+    if not filename.suffix == ".csv":
+        return None
+
+    try:
+        with open(filename, "r") as f:
+            lines = f.readlines()
+
+        if len(lines) < 2:  # Need at least header and one data line
+            return None
+
+        headings = lines[0].strip().split(",")
+
+        if headings != ["index", "x", "y", "z", "xn", "yn", "zn", "error"]:
+            return None
+
+        leds = []
+
+        for i in range(1, len(lines)):
+            line = lines[i].strip().split(",")
+
+            try:
+                led_id = int(line[0])
+                x = float(line[1])
+                y = float(line[2])
+                z = float(line[3])
+                xn = float(line[4])
+                yn = float(line[5])
+                zn = float(line[6])
+                error = float(line[7])
+            except (IndexError, ValueError):
+                continue
+
+            # Create LED3D object
+            led = LED3D(led_id)
+            led.point.position = np.array([x, y, z])
+            led.point.normal = np.array([xn, yn, zn])
+            led.point.error = error
+
+            leds.append(led)
+
+        return leds if len(leds) > 0 else None
+
+    except Exception:
+        return None
 
 
 def write_3d_leds_to_file(leds: list[LED3D], filename: Path):

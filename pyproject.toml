@@ -46,6 +46,7 @@ develop = [
     ]
 gui = [
     "PyQt6 >= 6.4.0",
+    "matplotlib >= 3.5.0",
     ]
 
 [project.urls]

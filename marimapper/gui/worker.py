@@ -26,6 +26,7 @@ class StatusMonitorThread(QThread):
         frame_queue: Queue,
         detector_update_queue: Queue2D,
         info_3d_queue=None,
+        data_3d_queue=None,
     ):
         """
         Initialize the status monitor thread.
@@ -35,12 +36,14 @@ class StatusMonitorThread(QThread):
             frame_queue: Queue containing video frames from detector
             detector_update_queue: Queue2D for detection status updates
             info_3d_queue: Queue3DInfo for 3D reconstruction status updates
+            data_3d_queue: Queue3D for full 3D LED data (for visualization)
         """
         super().__init__()
         self.signals = signals
         self.frame_queue = frame_queue
         self.detector_update_queue = detector_update_queue
         self.info_3d_queue = info_3d_queue
+        self.data_3d_queue = data_3d_queue
         self.running = True
 
     def run(self):
@@ -118,6 +121,17 @@ class StatusMonitorThread(QThread):
                         self.signals.reconstruction_updated.emit(led_info_dict)
                     except Exception as e:
                         self.signals.log_message.emit("warning", f"Error reading 3D info queue: {e}")
+                        pass  # Queue empty, ignore
+
+                # Poll 3D data queue for full 3D visualization
+                if self.data_3d_queue is not None and not self.data_3d_queue.empty():
+                    try:
+                        leds_3d = self.data_3d_queue.get_nowait()
+                        if len(leds_3d) > 0:
+                            self.signals.log_message.emit("info", f"Received 3D data update: {len(leds_3d)} LEDs")
+                            self.signals.points_3d_updated.emit(leds_3d)
+                    except Exception as e:
+                        self.signals.log_message.emit("warning", f"Error reading 3D data queue: {e}")
                         pass  # Queue empty, ignore
 
                 # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)

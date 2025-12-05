@@ -16,16 +16,19 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QSplitter,
     QMessageBox,
+    QTabWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QThread, pyqtSignal
 
 from marimapper.scanner import Scanner
 from marimapper.detector_process import CameraCommand
 from marimapper.gui.signals import MariMapperSignals
+from marimapper.file_tools import load_3d_leds_from_file
 from marimapper.gui.widgets.detector_widget import DetectorWidget
 from marimapper.gui.widgets.control_panel import ControlPanel
 from marimapper.gui.widgets.log_widget import LogWidget
 from marimapper.gui.widgets.status_table import StatusTable
+from marimapper.gui.widgets.visualizer_3d_widget import Visualizer3DWidget
 from marimapper.gui.worker import StatusMonitorThread
 
 
@@ -130,18 +133,27 @@ class MainWindow(QMainWindow):
         # Main layout
         main_layout = QHBoxLayout()
 
-        # Left side: Video display and log (vertical splitter)
+        # Left side: Tabbed view and log (vertical splitter)
         self.left_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Tab widget for Video Feed and 3D View
+        self.tab_widget = QTabWidget()
 
         # Video display widget
         self.detector_widget = DetectorWidget()
-        self.left_splitter.addWidget(self.detector_widget)
+        self.tab_widget.addTab(self.detector_widget, "Video Feed")
+
+        # 3D visualization widget
+        self.visualizer_3d_widget = Visualizer3DWidget()
+        self.tab_widget.addTab(self.visualizer_3d_widget, "3D View")
+
+        self.left_splitter.addWidget(self.tab_widget)
 
         # Log widget
         self.log_widget = LogWidget()
         self.left_splitter.addWidget(self.log_widget)
 
-        # Set initial sizes (video takes more space, log reasonably tall)
+        # Set initial sizes (tabs take more space, log reasonably tall)
         self.left_splitter.setSizes([600, 200])
 
         # Right side: Control panel and status table
@@ -236,6 +248,7 @@ class MainWindow(QMainWindow):
         self.signals.scan_completed.connect(self.on_scan_completed)
         self.signals.scan_failed.connect(self.on_scan_failed)
         self.signals.reconstruction_updated.connect(self.status_table.update_led_info)
+        self.signals.points_3d_updated.connect(self.visualizer_3d_widget.update_3d_data)
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -269,15 +282,17 @@ class MainWindow(QMainWindow):
 
         self.log_widget.log_success(f"Scanner initialized with {led_count} LEDs")
 
-        # Create detector update queue and 3D info queue
+        # Create detector update queue and 3D queues
         detector_update_queue = self.scanner.create_detector_update_queue()
         info_3d_queue = self.scanner.get_3d_info_queue()
+        data_3d_queue = self.scanner.get_3d_data_queue()
 
         self.log_widget.log_info(f"3D info queue created: {info_3d_queue is not None}")
+        self.log_widget.log_info(f"3D data queue created: {data_3d_queue is not None}")
 
         # Start status monitor thread
         self.monitor_thread = StatusMonitorThread(
-            self.signals, self.frame_queue, detector_update_queue, info_3d_queue
+            self.signals, self.frame_queue, detector_update_queue, info_3d_queue, data_3d_queue
         )
         self.monitor_thread.start()
 
@@ -307,6 +322,9 @@ class MainWindow(QMainWindow):
 
         # Auto-load saved masks
         self.auto_load_masks()
+
+        # Auto-load existing 3D data
+        self.auto_load_3d_data()
 
     @pyqtSlot(str)
     def on_scanner_error(self, error_msg):
@@ -743,6 +761,31 @@ class MainWindow(QMainWindow):
             self.detector_widget.set_mask_from_numpy(
                 self.current_masks[self.active_camera_index]
             )
+
+    def auto_load_3d_data(self):
+        """Auto-load existing 3D LED data on startup."""
+        led_map_3d_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
+
+        if not led_map_3d_path.exists():
+            self.log_widget.log_info("No existing 3D data found")
+            return
+
+        try:
+            self.log_widget.log_info("Loading existing 3D data...")
+            leds_3d = load_3d_leds_from_file(led_map_3d_path)
+
+            if leds_3d is not None and len(leds_3d) > 0:
+                self.log_widget.log_success(f"Loaded {len(leds_3d)} LEDs from existing 3D map")
+                # Display in 3D widget
+                self.visualizer_3d_widget.update_3d_data(leds_3d)
+                # Optionally switch to 3D View tab to show the loaded data
+                self.tab_widget.setCurrentIndex(1)  # Switch to 3D View tab
+                self.log_widget.log_info("Switched to 3D View tab to display loaded data")
+            else:
+                self.log_widget.log_warning("3D data file exists but contains no valid data")
+
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to load 3D data: {e}")
 
     def closeEvent(self, event):
         """Handle window close event - clean up scanner and threads."""

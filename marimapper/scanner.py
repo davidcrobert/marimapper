@@ -7,7 +7,7 @@ from pathlib import Path
 from marimapper.detector_process import DetectorProcess
 from marimapper.coordinator_process import CoordinatorProcess
 from marimapper.detector_worker_process import DetectorWorkerProcess
-from marimapper.queues import Queue2D, Queue3DInfo, DetectionControlEnum
+from marimapper.queues import Queue2D, Queue3D, Queue3DInfo, DetectionControlEnum
 from multiprocessing import get_logger, set_start_method, get_start_method
 from marimapper.file_tools import get_all_2d_led_maps
 from marimapper.utils import get_user_confirmation
@@ -118,10 +118,12 @@ class Scanner:
         self.renderer3d = VisualiseProcess()
         self.detector_update_queue = Queue2D()
         self.gui_3d_info_queue = Queue3DInfo()
+        self.gui_3d_data_queue = Queue3D()
 
         # Connect SFM outputs
         self.sfm.add_output_queue(self.renderer3d.get_input_queue())
         self.sfm.add_output_queue(self.file_writer.get_3d_input_queue())
+        self.sfm.add_output_queue(self.gui_3d_data_queue)
         self.sfm.add_output_info_queue(self.gui_3d_info_queue)
 
         # Initialize mode-specific components
@@ -263,6 +265,10 @@ class Scanner:
     def get_3d_info_queue(self):
         """Return the 3D info queue for GUI status table."""
         return self.gui_3d_info_queue
+
+    def get_3d_data_queue(self):
+        """Return the 3D data queue for GUI 3D visualization."""
+        return self.gui_3d_data_queue
 
     def get_camera_command_queue(self):
         """Return the camera command queue for sending commands to detector."""

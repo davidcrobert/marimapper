@@ -33,6 +33,7 @@ class CameraCommand(Enum):
     SET_LED = "set_led"  # (command, (led_id, on_bool))
     SET_LEDS_BULK = "set_leds_bulk"  # (command, [(led_id, on_bool), ...])
     SET_MASK = "set_mask"  # (command, {'mask': array, 'resolution': tuple})
+    CANCEL_SCAN = "cancel_scan"  # Cancel the current scan
 
 
 def backend_black(backend):
@@ -108,9 +109,47 @@ def detect_leds(
     frame_queue=None,
     mask=None,
     mask_resolution=None,
+    cancel_event=None,
+    command_queue=None,
 ):
     leds = []
     for led_id in range(led_id_from, led_id_to):
+        # Check for cancellation commands in queue before processing each LED
+        if command_queue is not None and not command_queue.empty():
+            try:
+                # Peek at commands and consume only CANCEL_SCAN
+                temp_commands = []
+                cancelled = False
+
+                while not command_queue.empty():
+                    cmd_data = command_queue.get_nowait()
+                    if isinstance(cmd_data, tuple):
+                        command, _ = cmd_data
+                    else:
+                        command = cmd_data
+
+                    if command == CameraCommand.CANCEL_SCAN:
+                        logger.info(f"Scan cancelled at LED {led_id}")
+                        cancelled = True
+                        # Don't put CANCEL_SCAN back in queue, consume it
+                    else:
+                        # Save other commands to put back
+                        temp_commands.append(cmd_data)
+
+                # Put non-cancel commands back in queue
+                for cmd in temp_commands:
+                    command_queue.put_nowait(cmd)
+
+                if cancelled:
+                    return None  # Signal cancellation
+            except:
+                pass
+
+        # Also check cancel event flag
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info(f"Scan cancelled at LED {led_id}")
+            return None  # Signal cancellation
+
         led = enable_and_find_led(
             cam,
             led_backend,
@@ -155,6 +194,7 @@ class DetectorProcess(Process):
         self._camera_command_queue: Queue = Queue()  # Camera control commands
         self._camera_command_queue.cancel_join_thread()
         self._exit_event = Event()
+        self._cancel_scan_event = Event()  # Event to signal scan cancellation
 
         self._device = device
         self._dark_exposure = dark_exposure
@@ -249,6 +289,9 @@ class DetectorProcess(Process):
                     self._request_detections_queue.get_id_from_id_to_view()
                 )
 
+                # Clear any previous cancellation before starting new scan
+                self._cancel_scan_event.clear()
+
                 success = backend_black(led_backend)
                 if not success:
                     logger.debug("failed to blacken backend due to missing attribute")
@@ -289,7 +332,19 @@ class DetectorProcess(Process):
                     self._frame_queue,
                     self._mask,
                     self._mask_resolution,
+                    self._cancel_scan_event,
+                    self._camera_command_queue,
                 )
+
+                # Check if scan was cancelled
+                if leds is None:
+                    logger.info("Scan was cancelled, resetting to idle mode")
+                    for queue in self._output_queues:
+                        queue.put(DetectionControlEnum.FAIL, None)
+                    set_cam_default(cam)
+                    backend_black(led_backend)
+                    self._cancel_scan_event.clear()  # Reset the event for next scan
+                    continue
 
                 if leds is not None and len(leds) > 0:
 
@@ -467,6 +522,17 @@ class DetectorProcess(Process):
                                         f"Detection mask set: resolution {mask_res}, "
                                         f"masked pixels: {masked_pixels}"
                                     )
+                        elif command == CameraCommand.CANCEL_SCAN:
+                            logger.info("GUI requested: Cancelling current scan")
+                            # Set the cancel flag
+                            self._cancel_scan_event.set()
+                            # Clear any pending scan requests from the queue
+                            while not self._request_detections_queue.empty():
+                                try:
+                                    self._request_detections_queue.get_nowait()
+                                except:
+                                    break
+                            logger.info("Scan cancellation requested, pending requests cleared")
                     except Exception as e:
                         logger.warning(f"Failed to process camera command: {e}")
 

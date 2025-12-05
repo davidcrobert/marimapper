@@ -349,10 +349,20 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def stop_scan(self):
         """Stop the current scan."""
-        # For Phase 1, we'll just log this - proper stop implementation
-        # requires additional scanner modifications
-        self.log_widget.log_warning("Stop requested (scan will complete current LED)")
-        self.statusBar().showMessage("Stop requested...")
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            camera_queue = self.scanner.get_camera_command_queue()
+            if camera_queue is not None:
+                camera_queue.put(CameraCommand.CANCEL_SCAN)
+                self.log_widget.log_info("Scan cancellation requested")
+                self.statusBar().showMessage("Cancelling scan...")
+            else:
+                self.log_widget.log_warning("Cannot cancel scan in multi-camera mode (not yet supported)")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to cancel scan: {str(e)}")
 
     @pyqtSlot()
     def set_exposure_dark(self):

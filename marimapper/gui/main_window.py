@@ -7,6 +7,7 @@ the Scanner instance.
 
 from multiprocessing import Queue
 from pathlib import Path
+import csv
 import cv2
 import json
 from PyQt6.QtWidgets import (
@@ -29,6 +30,7 @@ from marimapper.gui.widgets.control_panel import ControlPanel
 from marimapper.gui.widgets.log_widget import LogWidget
 from marimapper.gui.widgets.status_table import StatusTable
 from marimapper.gui.widgets.visualizer_3d_widget import Visualizer3DWidget
+from marimapper.gui.widgets.transform_controls import TransformControlsWidget
 from marimapper.gui.worker import StatusMonitorThread
 
 
@@ -146,6 +148,7 @@ class MainWindow(QMainWindow):
         # 3D visualization widget
         self.visualizer_3d_widget = Visualizer3DWidget()
         self.tab_widget.addTab(self.visualizer_3d_widget, "3D View")
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
 
         self.left_splitter.addWidget(self.tab_widget)
 
@@ -165,13 +168,19 @@ class MainWindow(QMainWindow):
         self.control_panel.start_button.setEnabled(False)  # Disable until scanner ready
         right_layout.addWidget(self.control_panel)
 
+        # Transform controls (shown only on 3D view)
+        self.transform_controls = TransformControlsWidget()
+        self.transform_controls.setVisible(False)
+        right_layout.addWidget(self.transform_controls)
+
         # LED status table
         self.status_table = StatusTable()
         right_layout.addWidget(self.status_table)
 
         # Give the status table most of the vertical space
         right_layout.setStretch(0, 1)
-        right_layout.setStretch(1, 3)
+        right_layout.setStretch(1, 1)
+        right_layout.setStretch(2, 3)
 
         self.right_widget.setLayout(right_layout)
 
@@ -220,30 +229,22 @@ class MainWindow(QMainWindow):
         self.status_table.bulk_led_toggle_requested.connect(self.set_bulk_leds)
         self.status_table.manual_selection_changed.connect(self.visualizer_3d_widget.set_active_leds)
 
-        # Connect control panel to status table for visual state updates
+        # Control panel <> status table state
         self.control_panel.all_off_requested.connect(self.status_table.set_all_off_state)
         self.control_panel.all_on_requested.connect(self.status_table.set_all_on_state)
 
-        # Connect detector widget signals
+        # Detector widget and mask controls
         self.detector_widget.maximize_toggled.connect(self.toggle_video_maximize)
-
-        # Connect mask control signals
-        self.control_panel.paint_mode_toggled.connect(
-            self.detector_widget.set_painting_mode
-        )
+        self.control_panel.paint_mode_toggled.connect(self.detector_widget.set_painting_mode)
         self.control_panel.brush_size_changed.connect(self.detector_widget.set_brush_size)
-        self.control_panel.mask_visibility_toggled.connect(
-            self.detector_widget.set_mask_visibility
-        )
+        self.control_panel.mask_visibility_toggled.connect(self.detector_widget.set_mask_visibility)
         self.control_panel.mask_clear_requested.connect(self.on_clear_mask)
         self.control_panel.mask_save_requested.connect(self.on_save_mask)
         self.control_panel.mask_load_requested.connect(self.on_load_mask)
         self.control_panel.camera_selected.connect(self.on_camera_selected)
-
-        # Connect detector widget mask signals
         self.detector_widget.mask_updated.connect(self.on_mask_updated)
 
-        # Connect worker thread signals
+        # Worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
         self.signals.log_message.connect(self.log_widget.add_message)
         self.signals.scan_completed.connect(self.on_scan_completed)
@@ -251,6 +252,16 @@ class MainWindow(QMainWindow):
         self.signals.reconstruction_updated.connect(self.status_table.update_led_info)
         self.signals.points_3d_updated.connect(self.visualizer_3d_widget.update_3d_data)
         self.visualizer_3d_widget.led_clicked.connect(self.on_visualizer_led_clicked)
+
+        # Transform controls
+        self.transform_controls.transform_changed.connect(self.visualizer_3d_widget.set_transform)
+        self.transform_controls.save_requested.connect(self.save_transformed_cloud)
+
+    def on_tab_changed(self, index: int):
+        """Swap control widgets when entering/exiting 3D view."""
+        is_3d = self.tab_widget.tabText(index) == "3D View"
+        self.control_panel.setVisible(not is_3d)
+        self.transform_controls.setVisible(is_3d)
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -554,6 +565,29 @@ class MainWindow(QMainWindow):
         """
         self.control_panel.scan_failed(error_msg)
         self.statusBar().showMessage("Scan failed")
+
+    @pyqtSlot()
+    def save_transformed_cloud(self):
+        """Save the currently displayed (transformed) 3D points to CSV."""
+        export = self.visualizer_3d_widget.export_transformed_leds()
+        if not export:
+            self.log_widget.log_warning("No 3D data available to save.")
+            return
+
+        ids, positions, normals, errors = export
+        path = Path.cwd() / "transformed_led_map_3d.csv"
+        try:
+            with open(path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["index", "x", "y", "z", "xn", "yn", "zn", "error"])
+                for idx, (pos, nrm, err) in enumerate(zip(positions, normals, errors)):
+                    led_idx = ids[idx] if ids else idx
+                    writer.writerow(
+                        [led_idx, pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2], err]
+                    )
+            self.log_widget.log_success(f"Saved transformed map to {path}")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to save transformed map: {e}")
 
     def show_about(self):
         """Show the about dialog."""

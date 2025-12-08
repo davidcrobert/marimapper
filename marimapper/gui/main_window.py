@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
         self.status_table.bulk_led_toggle_requested.connect(self.set_bulk_leds)
+        self.status_table.manual_selection_changed.connect(self.visualizer_3d_widget.set_active_leds)
 
         # Connect control panel to status table for visual state updates
         self.control_panel.all_off_requested.connect(self.status_table.set_all_off_state)
@@ -249,6 +250,7 @@ class MainWindow(QMainWindow):
         self.signals.scan_failed.connect(self.on_scan_failed)
         self.signals.reconstruction_updated.connect(self.status_table.update_led_info)
         self.signals.points_3d_updated.connect(self.visualizer_3d_widget.update_3d_data)
+        self.visualizer_3d_widget.led_clicked.connect(self.on_visualizer_led_clicked)
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -499,6 +501,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("LEDs: All on")
         except Exception as e:
             self.log_widget.log_error(f"Failed to turn LEDs on: {str(e)}")
+
+    @pyqtSlot(int)
+    def on_visualizer_led_clicked(self, led_id: int):
+        """Handle clicks on 3D points by toggling the corresponding LED."""
+        turn_on = led_id not in self.status_table.manual_on_leds
+        # Update table state (emits led_toggle_requested which routes to set_individual_led)
+        self.status_table.set_led_state(led_id, turn_on)
 
     @pyqtSlot(bool)
     def toggle_video_maximize(self, maximize: bool):

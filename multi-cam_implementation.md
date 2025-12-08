@@ -90,7 +90,7 @@ class CoordinatorProcess(Process):
         num_cameras: int,
         led_start: int,
         led_end: int,
-        detection_timeout: float = 5.0
+        detection_timeout: float = 1.25
     )
 
     def run(self):

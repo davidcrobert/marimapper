@@ -1,0 +1,344 @@
+ Paint-Based Masking Feature - Implementation Plan
+
+ Overview
+
+ Add a paint tool to the MariMapper GUI that allows users to paint mask areas on the video feed. Painted areas will be
+ ignored during LED detection (e.g., to mask out streetlights or other bright non-LED sources).
+
+ User Requirements
+
+ - Mask behavior: Painted RED areas are IGNORED during detection
+ - Eraser: Clear All button is sufficient (no dedicated eraser tool needed)
+ - Appearance: Semi-transparent red overlay
+ - Multi-camera: Each camera gets its own independent mask
+
+ Architecture
+
+ Data Flow
+
+ User Paints → DetectorWidget (display + capture) → MainWindow (storage) → DetectorProcess/Workers (apply)
+
+ Mask Format
+
+ - Binary numpy array: uint8 with values 0 (ignore) or 255 (detect)
+ - Storage: Per-camera in MainWindow, saved as PNG files
+ - Application: Applied via cv2.bitwise_and() before thresholding in find_led_in_image()
+
+ Key Design Decisions
+
+ 1. Per-camera masks: Store in dict {camera_index: mask_array}
+ 2. Resolution handling: Store mask at original resolution + metadata, scale dynamically to camera resolution
+ 3. Display overlay: QPixmap with alpha channel for semi-transparent red visualization
+ 4. Persistence: Auto-save/load masks as detection_mask_{camera_idx}.png in output directory
+
+ Implementation Steps
+
+ Step 1: Core Detection - Add Mask Parameter to Detection Algorithm
+
+ File: marimapper/detector.py
+
+ Changes:
+ 1. Add mask parameters to find_led_in_image() signature (lines 25):
+ def find_led_in_image(
+     image: np.ndarray,
+     threshold: int = 128,
+     mask: Optional[np.ndarray] = None,
+     mask_resolution: Optional[tuple] = None
+ ) -> Optional[Point2D]:
+ 2. Apply mask BEFORE thresholding (insert after line 28):
+ # Apply mask to ignore painted areas
+ if mask is not None:
+     img_height, img_width = image.shape
+     mask_height, mask_width = mask_resolution if mask_resolution else mask.shape
+
+     # Scale mask to match current image resolution if needed
+     if (img_height, img_width) != (mask_height, mask_width):
+         scaled_mask = cv2.resize(
+             mask,
+             (img_width, img_height),
+             interpolation=cv2.INTER_NEAREST  # Preserve binary values
+         )
+     else:
+         scaled_mask = mask
+
+     # Apply mask: 0 = ignore (painted), 255 = detect
+     image = cv2.bitwise_and(image, image, mask=scaled_mask)
+ 3. Update find_led() signature to accept and pass mask parameters (line 131):
+ def find_led(
+     cam: Camera,
+     threshold: int = 128,
+     display: bool = True,
+     frame_queue=None,
+     mask=None,
+     mask_resolution=None,
+ ) -> Optional[Point2D]:
+     image = cam.read()
+     results = find_led_in_image(image, threshold, mask, mask_resolution)
+     # ... rest unchanged
+
+ Step 2: DetectorProcess - Handle Mask Commands
+
+ File: marimapper/detector_process.py
+
+ Changes:
+ 1. Add mask state variables to __init__() (after line 150):
+ self._mask = None              # numpy array (H, W) uint8
+ self._mask_resolution = None   # (height, width) of original mask
+ 2. Add SET_MASK command to CameraCommand enum (line 25):
+ class CameraCommand(Enum):
+     # ... existing commands ...
+     SET_MASK = "set_mask"  # (command, {'mask': array, 'resolution': tuple})
+ 3. Handle SET_MASK command in run() loop (around line 356-430, in command processing block):
+ elif command == CameraCommand.SET_MASK:
+     if value is not None and isinstance(value, dict):
+         mask_data = value.get('mask')
+         mask_res = value.get('resolution')
+
+         if mask_data is None:
+             # Clear mask
+             self._mask = None
+             self._mask_resolution = None
+             logger.info("Detection mask cleared")
+         else:
+             self._mask = mask_data
+             self._mask_resolution = mask_res
+             masked_pixels = np.sum(mask_data == 0)
+             logger.info(f"Detection mask set: resolution {mask_res}, "
+                        f"masked pixels: {masked_pixels}")
+ 4. Update detect_leds() signature to accept mask (line 96):
+ def detect_leds(
+     # ... existing params ...
+     frame_queue=None,
+     mask=None,              # NEW
+     mask_resolution=None,   # NEW
+ ):
+ 5. Pass mask to enable_and_find_led() inside detect_leds() loop (line 110):
+ led = enable_and_find_led(
+     cam,
+     led_backend,
+     led_id,
+     view_id,
+     timeout_controller,
+     threshold,
+     display,
+     frame_queue,
+     mask,              # NEW
+     mask_resolution,   # NEW
+ )
+ 6. Update enable_and_find_led() signature (in detector.py, line 145):
+ def enable_and_find_led(
+     # ... existing params ...
+     frame_queue=None,
+     mask=None,              # NEW
+     mask_resolution=None,   # NEW
+ ) -> Optional[LED2D]:
+ 7. Pass mask to find_led() calls inside enable_and_find_led() (lines 174, 177):
+ point = find_led(cam, threshold, display, frame_queue, mask, mask_resolution)
+ 8. Update run() to pass mask when calling detect_leds() (around line 280):
+ leds = detect_leds(
+     led_id_from,
+     led_id_to,
+     cam,
+     led_backend,
+     view_id,
+     timeout_controller,
+     self._threshold,
+     self._display,
+     self._output_queues,
+     self._frame_queue,
+     self._mask,              # NEW
+     self._mask_resolution,   # NEW
+ )
+
+ Step 3: DetectorWorkerProcess - Multi-Camera Mask Support
+
+ File: marimapper/detector_worker_process.py
+
+ Changes:
+ 1. Add mask state to __init__() (similar to DetectorProcess)
+ 2. Add command handling for SET_MASK (similar to DetectorProcess)
+ 3. Pass mask to _find_led_with_display() calls (line 93-107)
+ 4. Update all detection function calls to include mask parameters
+
+ Step 4: DetectorWidget - Paint UI and Mouse Handling
+
+ File: marimapper/gui/widgets/detector_widget.py
+
+ Changes:
+ 1. Add mask state variables to __init__() (after line 24):
+ # Mask painting state
+ self.painting_mode = False          # Toggle painting on/off
+ self.is_painting = False            # Currently dragging
+ self.brush_size = 20                # Brush radius in pixels
+ self.mask_overlay = None            # QPixmap with alpha for display
+ self.last_paint_point = None        # For smooth line drawing
+ self.show_mask = True               # Toggle mask visibility
+ 2. Add new signals (after line 19):
+ mask_updated = pyqtSignal(object)  # Emits numpy array when mask changes
+ mask_cleared = pyqtSignal()
+ 3. Add mouse event handlers for painting:
+ def mousePressEvent(self, event):
+ def mouseMoveEvent(self, event):
+ def mouseReleaseEvent(self, event):
+   - Left-click + drag when painting_mode=True → paint circular brush strokes
+   - Emit mask_updated signal when mouse released
+ 4. Add painting helper methods:
+ def paint_mask_at(self, pos: QPoint):  # Paint circle at position
+ def paint_mask_line(self, start, end):  # Paint line between points
+ def update_display():  # Composite video + mask overlay
+ 5. Add mask conversion methods:
+ def get_mask_as_numpy() -> np.ndarray:  # QPixmap overlay → binary array
+ def set_mask_from_numpy(mask: np.ndarray):  # Load binary array → QPixmap
+ 6. Add control methods (called from MainWindow via signals):
+ def set_painting_mode(self, enabled: bool):
+ def set_brush_size(self, size: int):
+ def set_mask_visibility(self, visible: bool):
+ 7. Modify update_frame() to preserve and display mask overlay (line 72)
+
+ Step 5: ControlPanel - Mask Control UI
+
+ File: marimapper/gui/widgets/control_panel.py
+
+ Changes:
+ 1. Add "Mask Controls" GroupBox in init_ui():
+   - Paint Mode toggle button: Enable/disable painting (checkable, changes color when active)
+   - Brush Size slider: 5-100 pixels with value label
+   - Show/Hide Mask button: Toggle overlay visibility
+   - Clear Mask button: Remove all painted areas
+   - Save/Load Mask buttons: Persist masks to disk
+   - Camera selector (multi-camera only): Dropdown to select which camera's mask to edit
+ 2. Add new signals:
+ paint_mode_toggled = pyqtSignal(bool)
+ brush_size_changed = pyqtSignal(int)
+ mask_visibility_toggled = pyqtSignal(bool)
+ mask_clear_requested = pyqtSignal()
+ mask_save_requested = pyqtSignal()
+ mask_load_requested = pyqtSignal()
+ camera_selected = pyqtSignal(int)  # For multi-camera mask selection
+ 3. Add slot implementations for button clicks
+ 4. Add camera selector initialization method:
+ def set_camera_count(self, count: int):
+     # Populate camera selector dropdown if count > 1
+
+ Step 6: MainWindow - Coordination and Persistence
+
+ File: marimapper/gui/main_window.py
+
+ Changes:
+ 1. Add mask state variables in __init__():
+ # Mask management (per-camera)
+ self.current_masks = {}            # {camera_index: numpy_array}
+ self.mask_resolutions = {}         # {camera_index: (height, width)}
+ self.active_camera_index = 0       # Currently displayed camera for mask editing
+ self.camera_count = 1              # Number of cameras (1 for single, N for multi)
+ 2. Connect mask control signals in connect_signals():
+ self.control_panel.paint_mode_toggled.connect(self.detector_widget.set_painting_mode)
+ self.control_panel.brush_size_changed.connect(self.detector_widget.set_brush_size)
+ self.control_panel.mask_visibility_toggled.connect(self.detector_widget.set_mask_visibility)
+ self.control_panel.mask_clear_requested.connect(self.on_clear_mask)
+ self.control_panel.mask_save_requested.connect(self.on_save_mask)
+ self.control_panel.mask_load_requested.connect(self.on_load_mask)
+ self.control_panel.camera_selected.connect(self.on_camera_selected)  # Multi-camera
+ self.detector_widget.mask_updated.connect(self.on_mask_updated)
+ 3. Add mask management slot implementations:
+ @pyqtSlot(object)
+ def on_mask_updated(self, mask_numpy: np.ndarray):
+     # Store mask for active camera
+     # Send to appropriate detector process/worker
+
+ @pyqtSlot()
+ def on_clear_mask():
+     # Clear mask for active camera
+
+ @pyqtSlot()
+ def on_save_mask():
+     # Save masks to detection_mask_{camera_idx}.png + .json metadata
+
+ @pyqtSlot()
+ def on_load_mask():
+     # Load masks from disk
+
+ @pyqtSlot(int)
+ def on_camera_selected(self, camera_index: int):
+     # Switch active camera for mask editing
+     # Load that camera's mask into DetectorWidget
+
+ def send_mask_to_detector(self, camera_index: int):
+     # Send mask via CameraCommand.SET_MASK
+     # For single-camera: send to DetectorProcess camera_command_queue
+     # For multi-camera: send to specific DetectorWorkerProcess command queue
+ 4. Determine camera count and initialize UI in on_scanner_ready():
+ # Detect multi-camera mode
+ if hasattr(scanner, 'detector_workers'):  # Multi-camera
+     self.camera_count = len(scanner.detector_workers)
+ else:
+     self.camera_count = 1
+
+ # Initialize camera selector if multi-camera
+ if self.camera_count > 1:
+     self.control_panel.set_camera_count(self.camera_count)
+
+ # Auto-load saved masks
+ self.auto_load_masks()
+ 5. Add multi-camera video feed handling:
+   - Display only active camera's feed in DetectorWidget
+   - Route frames from multiple workers appropriately
+
+ Step 7: Multi-Camera Queue Access
+
+ File: marimapper/scanner.py (if needed)
+
+ Changes:
+ - Ensure MainWindow can access individual detector worker command queues
+ - May need to expose get_worker_command_queue(worker_index) method
+
+ File Paths Summary
+
+ Files to modify:
+ 1. marimapper/detector.py - Apply mask in detection algorithm
+ 2. marimapper/detector_process.py - Handle mask commands, pass to detector
+ 3. marimapper/detector_worker_process.py - Same mask handling for multi-camera
+ 4. marimapper/gui/widgets/detector_widget.py - Paint UI, mouse handling, overlay
+ 5. marimapper/gui/widgets/control_panel.py - Mask control buttons and settings
+ 6. marimapper/gui/main_window.py - Coordinate masks, persistence, communication
+ 7. marimapper/scanner.py - Expose worker queues (if needed)
+
+ No new files created - all changes to existing files
+
+ Edge Cases
+
+ 1. Resolution changes: Mask scales automatically via cv2.resize() with INTER_NEAREST
+ 2. Multi-camera different resolutions: Each camera scales its mask independently
+ 3. Camera switching: Load appropriate mask when user selects different camera
+ 4. Missing mask file: Gracefully handle, log info message
+ 5. Empty mask: None mask means no filtering (detect everywhere)
+ 6. Persistence: Auto-save on update, auto-load on startup
+
+ Testing Checklist
+
+ - Paint mask on video feed with various brush sizes
+ - Verify painted areas are ignored during LED detection
+ - Test Save/Load mask persistence
+ - Test Clear mask functionality
+ - Test Show/Hide mask visibility toggle
+ - Test multi-camera: paint different masks per camera
+ - Test multi-camera: switch between cameras and verify correct mask loads
+ - Verify mask scales correctly if camera resolution changes
+ - Verify mask overlay updates in real-time during painting
+ - Test paint mode enable/disable (mouse behaves correctly)
+
+ Implementation Order
+
+ 1. Step 1 (detector.py) - Core algorithm, easiest to test in isolation
+ 2. Step 2 (detector_process.py) - Mask command handling
+ 3. Step 4 (detector_widget.py) - Paint UI
+ 4. Step 5 (control_panel.py) - Control buttons
+ 5. Step 6 (main_window.py) - Coordinate everything
+ 6. Step 3 & 7 (multi-camera) - Multi-camera support and testing
+
+ Notes
+
+ - Mask format: 0 = ignore (painted/masked), 255 = detect (unpainted)
+ - Overlay color: Semi-transparent red (RGBA: 255, 0, 0, 100)
+ - File format: PNG (lossless, good for binary data) + JSON metadata
+ - Performance impact: < 1ms per frame (cv2.bitwise_and is fast)

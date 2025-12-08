@@ -7,7 +7,7 @@ using matplotlib's 3D plotting capabilities.
 
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt6.QtCore import pyqtSlot, Qt
+from PyQt6.QtCore import pyqtSlot, Qt, pyqtSignal
 
 try:
     import matplotlib
@@ -24,10 +24,15 @@ except ImportError:
 class Visualizer3DWidget(QWidget):
     """Widget for displaying 3D LED reconstruction."""
 
+    led_clicked = pyqtSignal(int)
+
     def __init__(self):
         """Initialize the 3D visualizer widget."""
         super().__init__()
         self.leds_3d = []
+        self.active_led_ids: set[int] = set()
+        self.hovered_index: int | None = None
+        self.scatter = None
         self.init_ui()
 
     def init_ui(self):
@@ -50,6 +55,10 @@ class Visualizer3DWidget(QWidget):
 
         # Configure initial view
         self._setup_plot()
+
+        # Connect interaction events
+        self.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
+        self.canvas.mpl_connect('button_press_event', self._on_mouse_click)
 
         layout.addWidget(self.canvas)
         self.setLayout(layout)
@@ -85,6 +94,34 @@ class Visualizer3DWidget(QWidget):
         # Set initial view angle
         self.ax.view_init(elev=20, azim=45)
 
+    def _compute_base_colors(self):
+        """Build the base color array, turning active LEDs bright pink."""
+        base_colors = []
+        for led in self.leds_3d:
+            if led.led_id in self.active_led_ids:
+                base_colors.append(np.array([1.0, 0.0, 1.0]))
+            else:
+                try:
+                    base_colors.append(np.array(led.get_color()) / 255.0)
+                except Exception:
+                    base_colors.append(np.array([0.5, 0.5, 1.0]))
+        return np.array(base_colors)
+
+    def _apply_colors(self, highlight_index=None):
+        """Apply colors to the scatter plot, optionally highlighting a point."""
+        if not MATPLOTLIB_AVAILABLE or self.scatter is None:
+            return
+
+        colors = self._compute_base_colors()
+
+        if highlight_index is not None and 0 <= highlight_index < len(colors):
+            colors[highlight_index] = np.array([1.0, 0.2, 1.0])  # hover highlight
+
+        self.scatter.set_facecolor(colors)
+        # Keep thin white outlines for visibility
+        self.scatter.set_edgecolor([[1, 1, 1] for _ in range(len(colors))])
+        self.canvas.draw_idle()
+
     @pyqtSlot(list)
     def update_3d_data(self, leds_3d):
         """
@@ -97,6 +134,7 @@ class Visualizer3DWidget(QWidget):
             return
 
         self.leds_3d = leds_3d
+        self.hovered_index = None
 
         # Clear previous plot
         self.ax.clear()
@@ -106,25 +144,22 @@ class Visualizer3DWidget(QWidget):
             # Extract positions and colors from LED3D objects
             positions = np.array([led.point.position for led in leds_3d])
 
-            # Get colors if available, otherwise use default
-            try:
-                colors = np.array([led.get_color() for led in leds_3d])
-                # Normalize colors from 0-255 to 0-1 range for matplotlib
-                colors = colors / 255.0
-            except:
-                colors = np.array([[0.5, 0.5, 1.0] for _ in leds_3d])
-
             # Plot points
-            self.ax.scatter(
+            self.scatter = self.ax.scatter(
                 positions[:, 0],
                 positions[:, 1],
                 positions[:, 2],
-                c=colors,
+                c=[[0.5, 0.5, 1.0]] * len(leds_3d),  # placeholder, real colors applied below
                 s=50,
                 alpha=0.8,
                 edgecolors='white',
-                linewidth=0.5
+                linewidth=0.5,
+                picker=True
             )
+            try:
+                self.scatter.set_pickradius(8)
+            except Exception:
+                pass
 
             # Plot lines connecting sequential LEDs
             for i in range(len(leds_3d) - 1):
@@ -186,6 +221,9 @@ class Visualizer3DWidget(QWidget):
             self.ax.set_ylim(mid_y - max_range, mid_y + max_range)
             self.ax.set_zlim(mid_z - max_range, mid_z + max_range)
 
+            # Apply base/active colors now that scatter exists
+            self._apply_colors()
+
             # Redraw canvas
             self.canvas.draw()
 
@@ -193,3 +231,46 @@ class Visualizer3DWidget(QWidget):
             print(f"Error updating 3D visualization: {e}")
             import traceback
             traceback.print_exc()
+
+    def _on_mouse_move(self, event):
+        """Highlight LED under the cursor."""
+        if not MATPLOTLIB_AVAILABLE or self.scatter is None:
+            return
+
+        if event.inaxes != self.ax:
+            if self.hovered_index is not None:
+                self.hovered_index = None
+                self._apply_colors()
+            return
+
+        contains, info = self.scatter.contains(event)
+        if contains and "ind" in info and len(info["ind"]) > 0:
+            hovered = info["ind"][0]
+            if hovered != self.hovered_index:
+                self.hovered_index = hovered
+                self._apply_colors(self.hovered_index)
+        else:
+            if self.hovered_index is not None:
+                self.hovered_index = None
+                self._apply_colors()
+
+    def _on_mouse_click(self, event):
+        """Emit LED click when a point is selected."""
+        if not MATPLOTLIB_AVAILABLE or self.scatter is None or event.inaxes != self.ax:
+            return
+
+        contains, info = self.scatter.contains(event)
+        if contains and "ind" in info and len(info["ind"]) > 0:
+            idx = info["ind"][0]
+            if 0 <= idx < len(self.leds_3d):
+                led_id = self.leds_3d[idx].led_id
+                self.led_clicked.emit(led_id)
+
+    @pyqtSlot(object)
+    def set_active_leds(self, led_ids):
+        """Update which LEDs are currently active (turned on)."""
+        try:
+            self.active_led_ids = set(led_ids)
+        except Exception:
+            self.active_led_ids = set()
+        self._apply_colors(self.hovered_index)

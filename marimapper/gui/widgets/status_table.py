@@ -16,6 +16,7 @@ class StatusTable(QWidget):
     # Signals
     led_toggle_requested = pyqtSignal(int, bool)  # (led_id, turn_on)
     bulk_led_toggle_requested = pyqtSignal(list)  # [(led_id, turn_on), ...]
+    manual_selection_changed = pyqtSignal(object)  # set of led_ids currently toggled on
 
     # Color scheme for LED states
     COLORS = {
@@ -436,6 +437,7 @@ class StatusTable(QWidget):
         # Add all LEDs to manual_on_leds set
         for led_id in self.sorted_ids:
             self.manual_on_leds.add(led_id)
+        self.manual_selection_changed.emit(set(self.manual_on_leds))
 
         # Update all ID cells to dark blue
         self._update_all_id_cells()
@@ -446,6 +448,7 @@ class StatusTable(QWidget):
         print("StatusTable: Setting all LEDs OFF (visual state)")
         # Clear the manual_on_leds set
         self.manual_on_leds.clear()
+        self.manual_selection_changed.emit(set())
 
         # Update all ID cells to gray
         self._update_all_id_cells()
@@ -500,6 +503,7 @@ class StatusTable(QWidget):
 
         # Emit signal to actually control the LED
         self.led_toggle_requested.emit(led_id, turn_on)
+        self.manual_selection_changed.emit(set(self.manual_on_leds))
 
     def _turn_filtered_on(self):
         """Turn on all LEDs in the current filter."""
@@ -522,6 +526,7 @@ class StatusTable(QWidget):
 
         # Refresh table to show updated visual state
         self._refresh_table()
+        self.manual_selection_changed.emit(set(self.manual_on_leds))
 
     def _turn_filtered_off(self):
         """Turn off all LEDs in the current filter."""
@@ -544,3 +549,25 @@ class StatusTable(QWidget):
 
         # Refresh table to show updated visual state
         self._refresh_table()
+        self.manual_selection_changed.emit(set(self.manual_on_leds))
+
+    @pyqtSlot(int, bool)
+    def set_led_state(self, led_id: int, turn_on: bool):
+        """
+        Update an LED's on/off state programmatically (e.g., from 3D view).
+
+        Emits the same signals as a table click so downstream behavior stays consistent.
+        """
+        current_on = led_id in self.manual_on_leds
+        if turn_on and not current_on:
+            self.manual_on_leds.add(led_id)
+        elif not turn_on and current_on:
+            self.manual_on_leds.discard(led_id)
+        else:
+            # No change required
+            return
+
+        # Refresh visuals and propagate signals
+        self._refresh_table()
+        self.manual_selection_changed.emit(set(self.manual_on_leds))
+        self.led_toggle_requested.emit(led_id, turn_on)

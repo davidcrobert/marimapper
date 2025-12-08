@@ -2,7 +2,9 @@
 Project management system for MariMapper.
 
 Handles creation, loading, saving, and deletion of projects. Each project contains
-scans, 3D reconstructions, masks, and configuration data.
+scans, 3D reconstructions, and configuration data.
+
+Note: Detection masks are session-only and not persisted in projects.
 """
 
 import json
@@ -11,9 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
-
-import cv2
-import numpy as np
 
 from marimapper.file_tools import (
     get_all_2d_led_maps,
@@ -48,7 +47,6 @@ class Project:
         """Create project folder structure if it doesn't exist."""
         folders = [
             self.base_folder / "scans",
-            self.base_folder / "masks",
             self.base_folder / "reconstruction",
         ]
         for folder in folders:
@@ -57,10 +55,6 @@ class Project:
     def get_scans_dir(self) -> Path:
         """Get the scans directory path."""
         return self.base_folder / "scans"
-
-    def get_masks_dir(self) -> Path:
-        """Get the masks directory path."""
-        return self.base_folder / "masks"
 
     def get_reconstruction_dir(self) -> Path:
         """Get the reconstruction directory path."""
@@ -329,12 +323,6 @@ class ProjectManager:
             return self.active_project.get_scans_dir()
         return None
 
-    def get_masks_dir(self) -> Optional[Path]:
-        """Get masks directory of active project."""
-        if self.active_project:
-            return self.active_project.get_masks_dir()
-        return None
-
     def get_reconstruction_dir(self) -> Optional[Path]:
         """Get reconstruction directory of active project."""
         if self.active_project:
@@ -384,53 +372,6 @@ class ProjectManager:
             logger.info(f"Loaded {len(leds)} 3D points from project")
         return leds
 
-    def load_masks(self) -> Dict[int, tuple[np.ndarray, Dict[str, Any]]]:
-        """
-        Load all detection masks from active project.
-
-        Returns:
-            Dictionary mapping camera index to (mask array, metadata dict)
-        """
-        if not self.active_project:
-            return {}
-
-        masks_dir = self.active_project.get_masks_dir()
-        if not masks_dir.exists():
-            return {}
-
-        loaded_masks = {}
-
-        # Find all mask PNG files
-        mask_files = sorted(masks_dir.glob("detection_mask_*.png"))
-
-        for mask_file in mask_files:
-            # Extract camera index from filename: detection_mask_0.png -> 0
-            try:
-                camera_index = int(mask_file.stem.split("_")[-1])
-            except (ValueError, IndexError):
-                logger.warning(f"Could not parse camera index from {mask_file.name}")
-                continue
-
-            # Load mask image
-            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-            if mask is None:
-                logger.warning(f"Could not load mask image: {mask_file}")
-                continue
-
-            # Load metadata
-            metadata_file = mask_file.with_suffix(".json")
-            metadata = {}
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, 'r') as f:
-                        metadata = json.load(f)
-                except json.JSONDecodeError:
-                    logger.warning(f"Could not load mask metadata: {metadata_file}")
-
-            loaded_masks[camera_index] = (mask, metadata)
-
-        logger.info(f"Loaded {len(loaded_masks)} detection masks from project")
-        return loaded_masks
 
     def get_transform(self) -> Optional[Dict[str, Any]]:
         """

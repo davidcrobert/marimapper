@@ -688,17 +688,14 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def on_save_mask(self):
-        """Save mask to file."""
+        """Save mask to file (session-only, in output_dir)."""
         if self.active_camera_index not in self.current_masks:
             self.log_widget.log_warning("No mask to save")
             return
 
         try:
-            # Use project masks folder if active, otherwise output_dir
-            if self.project_manager.is_project_active():
-                masks_dir = self.project_manager.get_masks_dir()
-            else:
-                masks_dir = Path(self.scanner_args.output_dir)
+            # Masks are session-only - save to output_dir, not project
+            masks_dir = Path(self.scanner_args.output_dir)
 
             # Get mask file path for active camera
             mask_file_path = (
@@ -732,13 +729,10 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def on_load_mask(self):
-        """Load mask from file."""
+        """Load mask from file (session-only, from output_dir)."""
         try:
-            # Use project masks folder if active, otherwise output_dir
-            if self.project_manager.is_project_active():
-                masks_dir = self.project_manager.get_masks_dir()
-            else:
-                masks_dir = Path(self.scanner_args.output_dir)
+            # Masks are session-only - load from output_dir, not project
+            masks_dir = Path(self.scanner_args.output_dir)
 
             # Get mask file path for active camera
             mask_file_path = (
@@ -839,12 +833,9 @@ class MainWindow(QMainWindow):
             )
 
     def auto_load_masks(self):
-        """Auto-load saved masks for all cameras on startup."""
-        # Use project masks folder if active, otherwise output_dir
-        if self.project_manager.is_project_active():
-            masks_dir = self.project_manager.get_masks_dir()
-        else:
-            masks_dir = Path(self.scanner_args.output_dir)
+        """Auto-load saved masks for all cameras on startup (session-only)."""
+        # Masks are session-only - only check output_dir, not project
+        masks_dir = Path(self.scanner_args.output_dir)
 
         for camera_index in range(self.camera_count):
             mask_file_path = (
@@ -1078,32 +1069,35 @@ class MainWindow(QMainWindow):
             self.log_widget.log_error(f"Project load failed: {e}")
 
     def load_project_data(self):
-        """Load all data from active project (masks, 3D data, transforms)."""
+        """Load all data from active project (2D scans, 3D data, transforms)."""
         if not self.project_manager.is_project_active():
             return
 
         project = self.project_manager.get_active_project()
 
-        # Load masks
-        loaded_masks = self.project_manager.load_masks()
-        for camera_index, (mask, metadata) in loaded_masks.items():
-            self.current_masks[camera_index] = mask
-            if 'resolution' in metadata:
-                self.mask_resolutions[camera_index] = tuple(metadata['resolution'])
-            self.log_widget.log_info(f"Loaded mask for camera {camera_index}")
+        # Note: Masks are not loaded from projects - they are session-only
+        # and should be drawn fresh each time
 
-        # Update detector widget with active camera's mask
-        if self.active_camera_index in self.current_masks:
-            self.detector_widget.set_mask_from_numpy(
-                self.current_masks[self.active_camera_index]
-            )
+        # Load 2D scans
+        leds_2d = self.project_manager.load_all_2d_scans()
 
         # Load 3D reconstruction
         leds_3d = self.project_manager.load_3d_reconstruction()
-        if leds_3d and len(leds_3d) > 0:
-            self.visualizer_3d_widget.update_3d_data(leds_3d)
-            self.tab_widget.setCurrentIndex(1)  # Switch to 3D View
-            self.log_widget.log_info(f"Loaded {len(leds_3d)} 3D points from project")
+
+        # Reconstruct LED info for Status Table
+        if leds_3d or leds_2d:
+            led_info_dict = self._reconstruct_led_info(leds_2d, leds_3d)
+
+            # Update Status Table
+            if led_info_dict:
+                self.status_table.update_led_info(led_info_dict)
+                self.log_widget.log_info(f"Loaded status for {len(led_info_dict)} LEDs")
+
+            # Update 3D visualization
+            if leds_3d and len(leds_3d) > 0:
+                self.visualizer_3d_widget.update_3d_data(leds_3d)
+                self.tab_widget.setCurrentIndex(1)  # Switch to 3D View
+                self.log_widget.log_info(f"Loaded {len(leds_3d)} 3D points from project")
 
         # Load transform
         transform = self.project_manager.get_transform()
@@ -1111,6 +1105,50 @@ class MainWindow(QMainWindow):
             self.visualizer_3d_widget.set_transform(**transform)
             self.transform_controls.set_transform(transform)
             self.log_widget.log_info("Loaded visualization transform from project")
+
+    def _reconstruct_led_info(self, leds_2d, leds_3d):
+        """
+        Reconstruct LED info dictionary from 2D and 3D data.
+
+        Args:
+            leds_2d: List of LED2D objects
+            leds_3d: List of LED3D objects (or None)
+
+        Returns:
+            Dictionary mapping LED ID to LEDInfo enum
+        """
+        from marimapper.led import LEDInfo
+
+        led_info_dict = {}
+
+        # Build set of LED IDs that have 3D reconstruction
+        reconstructed_ids = set()
+        if leds_3d:
+            for led_3d in leds_3d:
+                led_info_dict[led_3d.led_id] = led_3d.get_info()
+                reconstructed_ids.add(led_3d.led_id)
+
+        # Process 2D detections to find DETECTED and UNRECONSTRUCTABLE LEDs
+        if leds_2d:
+            # Group 2D detections by LED ID
+            detections_by_id = {}
+            for led_2d in leds_2d:
+                if led_2d.led_id not in detections_by_id:
+                    detections_by_id[led_2d.led_id] = []
+                detections_by_id[led_2d.led_id].append(led_2d)
+
+            # Classify LEDs without 3D reconstruction
+            for led_id, detections in detections_by_id.items():
+                if led_id not in reconstructed_ids:
+                    # LED was detected but not reconstructed
+                    if len(detections) >= 2:
+                        # Multiple views but failed reconstruction
+                        led_info_dict[led_id] = LEDInfo.UNRECONSTRUCTABLE
+                    elif len(detections) == 1:
+                        # Only detected in one view
+                        led_info_dict[led_id] = LEDInfo.DETECTED
+
+        return led_info_dict
 
     def on_close_project(self):
         """Handle Close Project menu action."""

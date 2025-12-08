@@ -3,7 +3,6 @@ from marimapper.led import (
     rescale,
     recenter,
     LED3D,
-    fill_gaps,
     get_overlap_and_percentage,
     LED2D,
     last_view,
@@ -144,13 +143,7 @@ class SFM(Process):
 
                 if len(self.leds_3d) > 0:
                     rescale(self.leds_3d)
-
-                    fill_gaps(
-                        self.leds_3d,
-                        min_distance=1 - self.interpolation_max_error,
-                        max_distance=1 + self.interpolation_max_error,
-                        max_missing=self.interpolation_max_fill,
-                    )
+                    # Skip interpolation: only use reconstructed points as-is.
 
                     recenter(self.leds_3d)
 

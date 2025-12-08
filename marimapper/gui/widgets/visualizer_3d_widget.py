@@ -6,13 +6,25 @@ This version provides hover highlighting (bright pink) and click-to-toggle LEDs.
 
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QVector4D
+from PyQt6.QtGui import QVector4D, QFont
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 IMPORT_ERROR_MSG = None
 try:
     import pyqtgraph as pg
-    from pyqtgraph.opengl import GLViewWidget, GLScatterPlotItem, GLLinePlotItem
+    from pyqtgraph.opengl import (
+        GLViewWidget,
+        GLScatterPlotItem,
+        GLLinePlotItem,
+        GLGridItem,
+    )
+    try:
+        from pyqtgraph.opengl import GLTextItem
+    except Exception:
+        try:
+            from pyqtgraph.opengl.items.GLTextItem import GLTextItem
+        except Exception:
+            GLTextItem = None
     PG_AVAILABLE = True
 except Exception as e:
     PG_AVAILABLE = False
@@ -20,6 +32,8 @@ except Exception as e:
     GLViewWidget = None
     GLScatterPlotItem = None
     GLLinePlotItem = None
+    GLGridItem = None
+    GLTextItem = None
 
 
 class Visualizer3DWidget(QWidget):
@@ -34,6 +48,8 @@ class Visualizer3DWidget(QWidget):
         self.hover_index: int | None = None
         self.scatter: GLScatterPlotItem | None = None
         self.lines: GLLinePlotItem | None = None
+        self.floor_grid: GLGridItem | None = None
+        self.floor_labels: list = []
         self.init_ui()
 
     def init_ui(self):
@@ -67,6 +83,8 @@ class Visualizer3DWidget(QWidget):
         self.view.mouseMoveEvent = self._wrapped_mouse_move(self.view.mouseMoveEvent)
         self.view.mousePressEvent = self._wrapped_mouse_press(self.view.mousePressEvent)
 
+        self._add_floor()
+
     def _wrapped_mouse_move(self, original_handler):
         def handler(ev):
             self._handle_hover(ev)
@@ -98,6 +116,37 @@ class Visualizer3DWidget(QWidget):
                 base = np.array([1.0, 0.2, 1.0])  # hover highlight
             colors.append(np.r_[base, 1.0])  # RGBA
         return np.array(colors, dtype=float) if colors else np.zeros((0, 4), dtype=float)
+
+    def _add_floor(self):
+        """Add a simple floor grid and cardinal labels around the origin."""
+        if not PG_AVAILABLE or GLGridItem is None:
+            return
+
+        # Grid in the X/Z plane with Y as up
+        grid = GLGridItem()
+        grid.setSize(x=20, y=20)
+        grid.setSpacing(x=1, y=1)
+        grid.translate(0, 0, 0)
+        grid.rotate(90, 1, 0, 0)
+        grid.setDepthValue(10)  # draw behind points
+        self.view.addItem(grid)
+        self.floor_grid = grid
+
+        if GLTextItem is None:
+            return  # text labels unavailable on this pyqtgraph version
+
+        labels = [
+            ("N", (0, 0, 10)),
+            ("S", (0, 0, -10)),
+            ("E", (10, 0, 0)),
+            ("W", (-10, 0, 0)),
+        ]
+        font = QFont()
+        font.setPointSize(14)
+        for text, pos in labels:
+            item = GLTextItem(text=text, color=(0.8, 0.8, 0.8, 0.9), font=font, pos=pos)
+            self.view.addItem(item)
+            self.floor_labels.append(item)
 
     @pyqtSlot(list)
     def update_3d_data(self, leds_3d):

@@ -404,8 +404,28 @@ class Visualizer3DWidget(QWidget):
         self._refresh_view()
 
     @pyqtSlot(dict)
-    def set_transform(self, transform: dict):
-        """Update the transform used to display the point cloud."""
+    def set_transform(
+        self,
+        transform: dict | None = None,
+        translation=None,
+        rotation=None,
+        scale=None,
+        **kwargs,
+    ):
+        """Update the transform used to display the point cloud.
+
+        Accepts either a transform dictionary or individual keyword args for
+        translation/rotation/scale so callers can use both styles.
+        """
+        if transform is None:
+            # Fill from current values, then overwrite any provided pieces.
+            transform = dict(self.current_transform)
+            if translation is not None:
+                transform["translation"] = translation
+            if rotation is not None:
+                transform["rotation"] = rotation
+            if scale is not None:
+                transform["scale"] = scale
         self.current_transform = transform
         self._refresh_view()
 

@@ -32,6 +32,9 @@ from marimapper.gui.widgets.status_table import StatusTable
 from marimapper.gui.widgets.visualizer_3d_widget import Visualizer3DWidget
 from marimapper.gui.widgets.transform_controls import TransformControlsWidget
 from marimapper.gui.worker import StatusMonitorThread
+from marimapper.gui.project_manager import ProjectManager
+from marimapper.gui.dialogs import NewProjectDialog, OpenProjectDialog
+from marimapper.gui.utils import get_backend_type_from_args
 
 
 class ScannerInitThread(QThread):
@@ -113,6 +116,9 @@ class MainWindow(QMainWindow):
         self.mask_resolutions = {}  # {camera_index: (height, width)}
         self.active_camera_index = 0  # Currently displayed camera for mask editing
         self.camera_count = 1  # Number of cameras (1 for single, N for multi)
+
+        # Project management
+        self.project_manager = ProjectManager()
 
         # Create signals
         self.signals = MariMapperSignals()
@@ -202,6 +208,27 @@ class MainWindow(QMainWindow):
 
         # File menu
         file_menu = menubar.addMenu("&File")
+
+        # Project submenu
+        project_menu = file_menu.addMenu("&Project")
+
+        new_project_action = project_menu.addAction("&New Project...")
+        new_project_action.triggered.connect(self.on_new_project)
+
+        open_project_action = project_menu.addAction("&Open Project...")
+        open_project_action.triggered.connect(self.on_open_project)
+
+        self.close_project_action = project_menu.addAction("&Close Project")
+        self.close_project_action.triggered.connect(self.on_close_project)
+        self.close_project_action.setEnabled(False)  # Initially disabled
+
+        project_menu.addSeparator()
+
+        delete_project_action = project_menu.addAction("&Delete Project...")
+        delete_project_action.triggered.connect(self.on_delete_project)
+
+        file_menu.addSeparator()
+
         exit_action = file_menu.addAction("E&xit")
         exit_action.triggered.connect(self.close)
 
@@ -212,6 +239,11 @@ class MainWindow(QMainWindow):
 
         # Status bar
         self.statusBar().showMessage("Initializing...")
+
+        # Project status label (permanent widget in status bar)
+        from PyQt6.QtWidgets import QLabel
+        self.project_label = QLabel("No project loaded")
+        self.statusBar().addPermanentWidget(self.project_label)
 
     def connect_signals(self):
         """Connect Qt signals to slots."""
@@ -255,6 +287,7 @@ class MainWindow(QMainWindow):
 
         # Transform controls
         self.transform_controls.transform_changed.connect(self.visualizer_3d_widget.set_transform)
+        self.transform_controls.transform_changed.connect(self.on_transform_changed)
         self.transform_controls.save_requested.connect(self.save_transformed_cloud)
 
     def on_tab_changed(self, index: int):
@@ -575,7 +608,14 @@ class MainWindow(QMainWindow):
             return
 
         ids, positions, normals, errors = export
-        path = Path.cwd() / "transformed_led_map_3d.csv"
+
+        # Use project reconstruction folder if active, otherwise current directory
+        if self.project_manager.is_project_active():
+            reconstruction_dir = self.project_manager.get_reconstruction_dir()
+            path = reconstruction_dir / "transformed_led_map_3d.csv"
+        else:
+            path = Path.cwd() / "transformed_led_map_3d.csv"
+
         try:
             with open(path, "w", newline="") as f:
                 writer = csv.writer(f)
@@ -586,6 +626,13 @@ class MainWindow(QMainWindow):
                         [led_idx, pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2], err]
                     )
             self.log_widget.log_success(f"Saved transformed map to {path}")
+
+            # Save transform to project if active
+            if self.project_manager.is_project_active():
+                self.project_manager.set_transform(
+                    self.visualizer_3d_widget.current_transform
+                )
+
         except Exception as e:
             self.log_widget.log_error(f"Failed to save transformed map: {e}")
 
@@ -647,10 +694,15 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # Use project masks folder if active, otherwise output_dir
+            if self.project_manager.is_project_active():
+                masks_dir = self.project_manager.get_masks_dir()
+            else:
+                masks_dir = Path(self.scanner_args.output_dir)
+
             # Get mask file path for active camera
             mask_file_path = (
-                Path(self.scanner_args.output_dir)
-                / f"detection_mask_{self.active_camera_index}.png"
+                masks_dir / f"detection_mask_{self.active_camera_index}.png"
             )
 
             # Save as PNG (lossless, good for binary data)
@@ -682,10 +734,15 @@ class MainWindow(QMainWindow):
     def on_load_mask(self):
         """Load mask from file."""
         try:
+            # Use project masks folder if active, otherwise output_dir
+            if self.project_manager.is_project_active():
+                masks_dir = self.project_manager.get_masks_dir()
+            else:
+                masks_dir = Path(self.scanner_args.output_dir)
+
             # Get mask file path for active camera
             mask_file_path = (
-                Path(self.scanner_args.output_dir)
-                / f"detection_mask_{self.active_camera_index}.png"
+                masks_dir / f"detection_mask_{self.active_camera_index}.png"
             )
 
             if not mask_file_path.exists():
@@ -783,10 +840,15 @@ class MainWindow(QMainWindow):
 
     def auto_load_masks(self):
         """Auto-load saved masks for all cameras on startup."""
+        # Use project masks folder if active, otherwise output_dir
+        if self.project_manager.is_project_active():
+            masks_dir = self.project_manager.get_masks_dir()
+        else:
+            masks_dir = Path(self.scanner_args.output_dir)
+
         for camera_index in range(self.camera_count):
             mask_file_path = (
-                Path(self.scanner_args.output_dir)
-                / f"detection_mask_{camera_index}.png"
+                masks_dir / f"detection_mask_{camera_index}.png"
             )
 
             if mask_file_path.exists():
@@ -807,7 +869,12 @@ class MainWindow(QMainWindow):
 
     def auto_load_3d_data(self):
         """Auto-load existing 3D LED data on startup."""
-        led_map_3d_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
+        # Use project reconstruction folder if active, otherwise output_dir
+        if self.project_manager.is_project_active():
+            reconstruction_dir = self.project_manager.get_reconstruction_dir()
+            led_map_3d_path = reconstruction_dir / "led_map_3d.csv"
+        else:
+            led_map_3d_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
 
         if not led_map_3d_path.exists():
             self.log_widget.log_info("No existing 3D data found")
@@ -829,6 +896,310 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             self.log_widget.log_error(f"Failed to load 3D data: {e}")
+
+    # Project Management Methods
+
+    def on_transform_changed(self, transform: dict):
+        """Save transform to active project when it changes."""
+        if self.project_manager.is_project_active():
+            self.project_manager.set_transform(transform)
+
+    def update_project_status(self):
+        """Update project status label in status bar."""
+        if self.project_manager.is_project_active():
+            project = self.project_manager.get_active_project()
+            self.project_label.setText(f"Project: {project.config['project_name']}")
+            self.close_project_action.setEnabled(True)
+        else:
+            self.project_label.setText("No project loaded")
+            self.close_project_action.setEnabled(False)
+
+    def on_new_project(self):
+        """Handle New Project menu action."""
+        if not self.scanner:
+            QMessageBox.warning(
+                self,
+                "Scanner Not Ready",
+                "Please wait for scanner to initialize before creating a project."
+            )
+            return
+
+        # Show new project dialog
+        dialog = NewProjectDialog(parent=self)
+
+        if dialog.exec() != NewProjectDialog.DialogCode.Accepted:
+            return
+
+        # Get project configuration
+        name, location, description, copy_settings = dialog.get_project_config()
+
+        try:
+            # Get backend type
+            backend_type = get_backend_type_from_args(self.scanner_args)
+
+            # Create project
+            if copy_settings:
+                # Use current scanner settings
+                project = self.project_manager.create_project(
+                    name, location, self.scanner_args, backend_type, description
+                )
+            else:
+                # Use default settings (current implementation always copies)
+                project = self.project_manager.create_project(
+                    name, location, self.scanner_args, backend_type, description
+                )
+
+            # Set as active project
+            self.project_manager.set_active_project(project)
+
+            # Update scanner output directory to project scans folder
+            if self.scanner:
+                from marimapper.scanner import join_with_warning
+                from marimapper.file_writer_process import FileWriterProcess
+
+                # Stop and restart file writer with new output directory
+                self.scanner.file_writer.stop()
+                join_with_warning(self.scanner.file_writer, "File Writer", timeout=3)
+
+                self.scanner.output_dir = project.get_scans_dir()
+                self.scanner.file_writer = FileWriterProcess(project.get_scans_dir())
+
+                # Reconnect queues
+                self.scanner.sfm.add_output_queue(
+                    self.scanner.file_writer.get_3d_input_queue()
+                )
+
+                if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
+                    for worker in self.scanner.detector_workers:
+                        worker.add_output_queue(
+                            self.scanner.file_writer.get_2d_input_queue()
+                        )
+                else:
+                    self.scanner.detector.add_output_queue(
+                        self.scanner.file_writer.get_2d_input_queue()
+                    )
+
+                self.scanner.file_writer.start()
+
+            # Update UI
+            self.update_project_status()
+            self.log_widget.log_success(f"Created and activated project: {name}")
+
+        except FileExistsError as e:
+            QMessageBox.critical(self, "Project Creation Failed", str(e))
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Project Creation Failed",
+                f"An error occurred while creating the project:\n\n{str(e)}"
+            )
+            self.log_widget.log_error(f"Project creation failed: {e}")
+
+    def on_open_project(self):
+        """Handle Open Project menu action."""
+        # Show open project dialog
+        project_folder = OpenProjectDialog.get_project_folder(
+            parent=self,
+            start_dir=self.project_manager.projects_root
+        )
+
+        if not project_folder:
+            return
+
+        try:
+            # Load project
+            project = self.project_manager.load_project(project_folder)
+
+            # Check backend compatibility
+            project_backend = project.config['scanner_config']['backend']['type']
+            current_backend = get_backend_type_from_args(self.scanner_args)
+
+            if project_backend != current_backend:
+                response = QMessageBox.warning(
+                    self,
+                    "Backend Mismatch",
+                    f"Project uses '{project_backend}' backend but scanner is running "
+                    f"'{current_backend}'.\n\n"
+                    f"Some features may not work correctly. Continue anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+
+                if response != QMessageBox.StandardButton.Yes:
+                    return
+
+            # Set as active project
+            self.project_manager.set_active_project(project)
+
+            # Update scanner output directory
+            if self.scanner:
+                from marimapper.scanner import join_with_warning
+                from marimapper.file_writer_process import FileWriterProcess
+
+                # Stop and restart file writer with new output directory
+                self.scanner.file_writer.stop()
+                join_with_warning(self.scanner.file_writer, "File Writer", timeout=3)
+
+                self.scanner.output_dir = project.get_scans_dir()
+                self.scanner.file_writer = FileWriterProcess(project.get_scans_dir())
+
+                # Reconnect queues
+                self.scanner.sfm.add_output_queue(
+                    self.scanner.file_writer.get_3d_input_queue()
+                )
+
+                if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
+                    for worker in self.scanner.detector_workers:
+                        worker.add_output_queue(
+                            self.scanner.file_writer.get_2d_input_queue()
+                        )
+                else:
+                    self.scanner.detector.add_output_queue(
+                        self.scanner.file_writer.get_2d_input_queue()
+                    )
+
+                self.scanner.file_writer.start()
+
+            # Load project data
+            self.load_project_data()
+
+            # Update UI
+            self.update_project_status()
+            self.log_widget.log_success(f"Opened project: {project.config['project_name']}")
+
+        except (FileNotFoundError, ValueError) as e:
+            QMessageBox.critical(self, "Failed to Open Project", str(e))
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Failed to Open Project",
+                f"An error occurred while opening the project:\n\n{str(e)}"
+            )
+            self.log_widget.log_error(f"Project load failed: {e}")
+
+    def load_project_data(self):
+        """Load all data from active project (masks, 3D data, transforms)."""
+        if not self.project_manager.is_project_active():
+            return
+
+        project = self.project_manager.get_active_project()
+
+        # Load masks
+        loaded_masks = self.project_manager.load_masks()
+        for camera_index, (mask, metadata) in loaded_masks.items():
+            self.current_masks[camera_index] = mask
+            if 'resolution' in metadata:
+                self.mask_resolutions[camera_index] = tuple(metadata['resolution'])
+            self.log_widget.log_info(f"Loaded mask for camera {camera_index}")
+
+        # Update detector widget with active camera's mask
+        if self.active_camera_index in self.current_masks:
+            self.detector_widget.set_mask_from_numpy(
+                self.current_masks[self.active_camera_index]
+            )
+
+        # Load 3D reconstruction
+        leds_3d = self.project_manager.load_3d_reconstruction()
+        if leds_3d and len(leds_3d) > 0:
+            self.visualizer_3d_widget.update_3d_data(leds_3d)
+            self.tab_widget.setCurrentIndex(1)  # Switch to 3D View
+            self.log_widget.log_info(f"Loaded {len(leds_3d)} 3D points from project")
+
+        # Load transform
+        transform = self.project_manager.get_transform()
+        if transform:
+            self.visualizer_3d_widget.set_transform(**transform)
+            self.transform_controls.set_transform(transform)
+            self.log_widget.log_info("Loaded visualization transform from project")
+
+    def on_close_project(self):
+        """Handle Close Project menu action."""
+        if not self.project_manager.is_project_active():
+            return
+
+        project_name = self.project_manager.get_active_project().config['project_name']
+
+        # Close project (saves automatically)
+        self.project_manager.close_project()
+
+        # Update UI
+        self.update_project_status()
+        self.log_widget.log_info(f"Closed project: {project_name}")
+
+        # Optionally reset output directory to default
+        if self.scanner:
+            from marimapper.scanner import join_with_warning
+            from marimapper.file_writer_process import FileWriterProcess
+
+            # Stop and restart file writer with default output directory
+            self.scanner.file_writer.stop()
+            join_with_warning(self.scanner.file_writer, "File Writer", timeout=3)
+
+            self.scanner.output_dir = self.scanner_args.output_dir
+            self.scanner.file_writer = FileWriterProcess(self.scanner_args.output_dir)
+
+            # Reconnect queues
+            self.scanner.sfm.add_output_queue(
+                self.scanner.file_writer.get_3d_input_queue()
+            )
+
+            if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
+                for worker in self.scanner.detector_workers:
+                    worker.add_output_queue(
+                        self.scanner.file_writer.get_2d_input_queue()
+                    )
+            else:
+                self.scanner.detector.add_output_queue(
+                    self.scanner.file_writer.get_2d_input_queue()
+                )
+
+            self.scanner.file_writer.start()
+
+    def on_delete_project(self):
+        """Handle Delete Project menu action."""
+        # Show open project dialog to select project to delete
+        project_folder = OpenProjectDialog.get_project_folder(
+            parent=self,
+            start_dir=self.project_manager.projects_root
+        )
+
+        if not project_folder:
+            return
+
+        try:
+            # Load project to get its name
+            project = self.project_manager.load_project(project_folder)
+            project_name = project.config['project_name']
+
+            # Confirm deletion
+            response = QMessageBox.question(
+                self,
+                "Delete Project?",
+                f"This will permanently delete the project folder and all data:\n\n"
+                f"{project.base_folder}\n\n"
+                f"Project: {project_name}\n\n"
+                f"This action cannot be undone. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if response != QMessageBox.StandardButton.Yes:
+                return
+
+            # Delete project
+            self.project_manager.delete_project(project)
+
+            # Update UI
+            self.update_project_status()
+            self.log_widget.log_success(f"Deleted project: {project_name}")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Failed to Delete Project",
+                f"An error occurred while deleting the project:\n\n{str(e)}"
+            )
+            self.log_widget.log_error(f"Project deletion failed: {e}")
 
     def closeEvent(self, event):
         """Handle window close event - clean up scanner and threads."""

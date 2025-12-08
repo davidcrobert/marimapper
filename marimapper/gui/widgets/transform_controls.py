@@ -128,3 +128,32 @@ class TransformControlsWidget(QWidget):
             "scale": (self.sx.value(), self.sy.value(), self.sz.value()),
         }
         self.transform_changed.emit(transform)
+
+    def set_transform(self, transform: dict):
+        """Populate the UI from a transform dictionary."""
+        # Avoid recursive signals while updating the UI.
+        spins = (
+            (self.tx, transform.get("translation", (0, 0, 0))[0]),
+            (self.ty, transform.get("translation", (0, 0, 0))[1]),
+            (self.tz, transform.get("translation", (0, 0, 0))[2]),
+            (self.rx, transform.get("rotation", (0, 0, 0))[0]),
+            (self.ry, transform.get("rotation", (0, 0, 0))[1]),
+            (self.rz, transform.get("rotation", (0, 0, 0))[2]),
+            (self.sx, transform.get("scale", (1, 1, 1))[0]),
+            (self.sy, transform.get("scale", (1, 1, 1))[1]),
+            (self.sz, transform.get("scale", (1, 1, 1))[2]),
+        )
+        for spin, value in spins:
+            spin.blockSignals(True)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
+
+        # If locked, keep all scale values in sync (use X as source).
+        if self.lock_scale_checkbox.isChecked():
+            value = self.sx.value()
+            for spin in (self.sy, self.sz):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+
+        self._emit_transform()

@@ -401,8 +401,7 @@ class Visualizer3DWidget(QWidget):
             self.active_led_ids = set(led_ids)
         except Exception:
             self.active_led_ids = set()
-        if self.scatter is not None:
-            self.scatter.setData(color=self._colors_array(highlight=self.hover_index))
+        self._refresh_view()
 
     @pyqtSlot(dict)
     def set_transform(self, transform: dict):

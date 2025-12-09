@@ -69,7 +69,9 @@ class Visualizer3DWidget(QWidget):
         self.axis_gizmo: GLLinePlotItem | None = None
         self.floor_marks: GLLinePlotItem | None = None
         self.base_positions: np.ndarray | None = None
+        self.working_positions: np.ndarray | None = None
         self.base_normals: np.ndarray | None = None
+        self.working_normals: np.ndarray | None = None
         self.current_transform = {
             "translation": (0.0, 0.0, 0.0),
             "rotation": (0.0, 0.0, 0.0),  # degrees
@@ -108,6 +110,14 @@ class Visualizer3DWidget(QWidget):
             "center": self.view.opts.get("center"),
         }
 
+        self.hint_label = QLabel("")
+        self.hint_label.setVisible(False)
+        self.hint_label.setStyleSheet(
+            "QLabel { color: #f2f2f2; background: rgba(0,0,0,150); padding: 6px 8px; "
+            "border-radius: 6px; font-size: 11px; }"
+        )
+
+        layout.addWidget(self.hint_label)
         layout.addWidget(self.view)
         self.setLayout(layout)
 
@@ -164,12 +174,22 @@ class Visualizer3DWidget(QWidget):
             return np.zeros((0, 3), dtype=float)
         return np.array([led.point.position for led in self.leds_3d], dtype=float)
 
+    def _working_positions_array(self):
+        if self.working_positions is not None:
+            return self.working_positions
+        return self._base_positions_array()
+
     def _base_normals_array(self):
         if self.base_normals is not None:
             return self.base_normals
         if not self.leds_3d:
             return np.zeros((0, 3), dtype=float)
         return np.array([led.point.normal for led in self.leds_3d], dtype=float)
+
+    def _working_normals_array(self):
+        if self.working_normals is not None:
+            return self.working_normals
+        return self._base_normals_array()
 
     def _positions_array(self):
         """Current (transformed) positions for display/picking."""
@@ -231,10 +251,10 @@ class Visualizer3DWidget(QWidget):
         return translated
 
     def _transformed_positions(self) -> np.ndarray:
-        return self._apply_transform(self._base_positions_array())
+        return self._apply_transform(self._working_positions_array())
 
     def _transformed_normals(self) -> np.ndarray:
-        normals = self._base_normals_array()
+        normals = self._working_normals_array()
         if normals.size == 0:
             return normals
         # Rotate normals, do not translate or scale (assume uniform scale)
@@ -371,6 +391,9 @@ class Visualizer3DWidget(QWidget):
         self.hover_index = None
         self.base_positions = np.array([led.point.position for led in leds_3d], dtype=float)
         self.base_normals = np.array([led.point.normal for led in leds_3d], dtype=float)
+        # Working copies to support placement mode edits without losing originals
+        self.working_positions = np.array(self.base_positions, copy=True)
+        self.working_normals = np.array(self.base_normals, copy=True)
 
         self._refresh_view()
 
@@ -533,6 +556,21 @@ class Visualizer3DWidget(QWidget):
         self.current_transform = transform
         self._refresh_view()
 
+    def set_working_positions(self, positions: np.ndarray | None):
+        """Set working positions (world space) used for display/exports."""
+        if positions is None:
+            self.working_positions = None
+        else:
+            self.working_positions = np.array(positions, dtype=float, copy=True)
+        self._refresh_view()
+
+    def reset_working_positions(self):
+        """Restore working positions from base/original positions."""
+        if self.base_positions is None:
+            return
+        self.working_positions = np.array(self.base_positions, copy=True)
+        self._refresh_view()
+
     def export_transformed_leds(self):
         """Return transformed led data arrays (ids, positions, normals, errors) or None."""
         if not self.leds_3d or self.base_positions is None:
@@ -542,3 +580,12 @@ class Visualizer3DWidget(QWidget):
         normals = self._transformed_normals()
         errors = np.array([getattr(led.point, "error", 0.0) for led in self.leds_3d], dtype=float)
         return ids, positions, normals, errors
+
+    def set_hint_text(self, text: str | None):
+        """Show or hide the hint banner above the view."""
+        if text:
+            self.hint_label.setText(text)
+            self.hint_label.setVisible(True)
+        else:
+            self.hint_label.clear()
+            self.hint_label.setVisible(False)

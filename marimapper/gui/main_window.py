@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QMessageBox,
     QTabWidget,
+    QPushButton,
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QThread, pyqtSignal
 
@@ -31,6 +32,7 @@ from marimapper.gui.widgets.log_widget import LogWidget
 from marimapper.gui.widgets.status_table import StatusTable
 from marimapper.gui.widgets.visualizer_3d_widget import Visualizer3DWidget
 from marimapper.gui.widgets.transform_controls import TransformControlsWidget
+from marimapper.gui.widgets.placement_panel import PlacementPanel
 from marimapper.gui.worker import StatusMonitorThread
 from marimapper.gui.project_manager import ProjectManager
 from marimapper.gui.dialogs import NewProjectDialog, OpenProjectDialog
@@ -108,6 +110,9 @@ class MainWindow(QMainWindow):
         self.frame_queue = None
         self.monitor_thread = None
         self.init_thread = None
+        self.placement_mode_active = False
+        self.placement_selection: set[int] = set()
+        self._pre_placement_layout = None
         self.current_view_id = 0
         self.is_video_maximized = False
 
@@ -179,6 +184,19 @@ class MainWindow(QMainWindow):
         self.transform_controls.setVisible(False)
         right_layout.addWidget(self.transform_controls)
 
+        self.placement_toggle_btn = QPushButton("Enter Placement Mode")
+        self.placement_toggle_btn.setCheckable(True)
+        self.placement_toggle_btn.clicked.connect(self.toggle_placement_mode)
+        self.placement_toggle_btn.setVisible(False)
+        right_layout.addWidget(self.placement_toggle_btn)
+
+        self.placement_panel = PlacementPanel()
+        self.placement_panel.setVisible(False)
+        self.placement_panel.exit_requested.connect(self.exit_placement_mode)
+        self.placement_panel.commit_requested.connect(self.on_placement_commit)
+        self.placement_panel.discard_requested.connect(self.on_placement_discard)
+        right_layout.addWidget(self.placement_panel)
+
         # LED status table
         self.status_table = StatusTable()
         right_layout.addWidget(self.status_table)
@@ -186,7 +204,9 @@ class MainWindow(QMainWindow):
         # Give the status table most of the vertical space
         right_layout.setStretch(0, 1)
         right_layout.setStretch(1, 1)
-        right_layout.setStretch(2, 3)
+        right_layout.setStretch(2, 0)
+        right_layout.setStretch(3, 0)
+        right_layout.setStretch(4, 3)
 
         self.right_widget.setLayout(right_layout)
 
@@ -294,7 +314,132 @@ class MainWindow(QMainWindow):
         """Swap control widgets when entering/exiting 3D view."""
         is_3d = self.tab_widget.tabText(index) == "3D View"
         self.control_panel.setVisible(not is_3d)
-        self.transform_controls.setVisible(is_3d)
+        self.transform_controls.setVisible(is_3d and not self.placement_mode_active)
+        self.placement_toggle_btn.setVisible(is_3d)
+        if not is_3d and self.placement_mode_active:
+            self.exit_placement_mode()
+
+    @pyqtSlot()
+    def toggle_placement_mode(self):
+        if self.placement_mode_active:
+            self.exit_placement_mode()
+        else:
+            self.enter_placement_mode()
+
+    def enter_placement_mode(self):
+        """Switch UI into placement-focused layout."""
+        if self.placement_mode_active:
+            return
+
+        # Ensure 3D tab is active
+        idx = self.tab_widget.indexOf(self.visualizer_3d_widget)
+        if idx >= 0:
+            self.tab_widget.setCurrentIndex(idx)
+
+        self.placement_mode_active = True
+        self.placement_selection.clear()
+        self._pre_placement_layout = {
+            "main_sizes": self.main_splitter.sizes(),
+            "left_sizes": self.left_splitter.sizes(),
+            "log_visible": self.log_widget.isVisible(),
+            "status_visible": self.status_table.isVisible(),
+        }
+
+        self.log_widget.setVisible(False)
+        self.status_table.setVisible(False)
+        self.transform_controls.setVisible(False)
+        self.placement_panel.setVisible(True)
+        self.placement_panel.set_dirty(False)
+        self.placement_panel.set_selected_led(None)
+        self.placement_toggle_btn.blockSignals(True)
+        self.placement_toggle_btn.setChecked(True)
+        self.placement_toggle_btn.blockSignals(False)
+        self.placement_toggle_btn.setText("Exit Placement Mode")
+
+        # Bias space toward the 3D viewport
+        self.left_splitter.setSizes([max(self.width() - 200, 800), 0])
+        self.main_splitter.setSizes([max(self.width() - 250, 900), 250])
+
+        self.visualizer_3d_widget.set_hint_text(
+            "Placement mode: click to select LEDs, drag to orbit, right-drag to pan, Esc to exit."
+        )
+        self.statusBar().showMessage("Placement mode active")
+
+    def exit_placement_mode(self):
+        """Restore standard layout and interactions."""
+        if not self.placement_mode_active:
+            return
+        self.placement_mode_active = False
+
+        self.log_widget.setVisible(self._pre_placement_layout.get("log_visible", True) if self._pre_placement_layout else True)
+        self.status_table.setVisible(self._pre_placement_layout.get("status_visible", True) if self._pre_placement_layout else True)
+        self.placement_panel.setVisible(False)
+        self.transform_controls.setVisible(self.tab_widget.currentWidget() == self.visualizer_3d_widget)
+        self.placement_toggle_btn.blockSignals(True)
+        self.placement_toggle_btn.setChecked(False)
+        self.placement_toggle_btn.blockSignals(False)
+        self.placement_toggle_btn.setText("Enter Placement Mode")
+
+        if self._pre_placement_layout:
+            try:
+                self.main_splitter.setSizes(self._pre_placement_layout.get("main_sizes", self.main_splitter.sizes()))
+                self.left_splitter.setSizes(self._pre_placement_layout.get("left_sizes", self.left_splitter.sizes()))
+            except Exception:
+                pass
+        self._pre_placement_layout = None
+
+        # Restore active LED highlighting from status table and clear placement hint
+        try:
+            self.visualizer_3d_widget.set_active_leds(self.status_table.manual_on_leds)
+        except Exception:
+            pass
+        self.visualizer_3d_widget.set_hint_text(None)
+        self.statusBar().showMessage("Placement mode exited")
+
+    def keyPressEvent(self, event):
+        """Handle global shortcuts (e.g., Esc to exit placement)."""
+        if event.key() == Qt.Key.Key_Escape and self.placement_mode_active:
+            self.exit_placement_mode()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _update_placement_selection_display(self):
+        """Refresh selection summary in placement panel."""
+        if not self.placement_mode_active:
+            return
+        if not self.placement_selection:
+            self.placement_panel.set_selected_led(None)
+            return
+        led_id = next(iter(self.placement_selection))
+        pos = None
+        exported = self.visualizer_3d_widget.export_transformed_leds()
+        if exported:
+            ids, positions, _, _ = exported
+            try:
+                idx = ids.index(led_id)
+                pos = tuple(positions[idx])
+            except ValueError:
+                pos = None
+        self.placement_panel.set_selected_led(led_id, pos)
+
+    @pyqtSlot()
+    def on_placement_commit(self):
+        """Placeholder commit hook; persists working positions in future sprint."""
+        self.placement_panel.set_dirty(False)
+        self.log_widget.log_info("Placement commit requested (stub).")
+        self.statusBar().showMessage("Placement commit requested (not yet wired)")
+
+    @pyqtSlot()
+    def on_placement_discard(self):
+        """Reset working positions to originals."""
+        try:
+            self.visualizer_3d_widget.reset_working_positions()
+        except Exception:
+            pass
+        self.placement_panel.set_dirty(False)
+        self._update_placement_selection_display()
+        self.statusBar().showMessage("Placement changes discarded (reset to original)")
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -549,6 +694,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot(int)
     def on_visualizer_led_clicked(self, led_id: int):
         """Handle clicks on 3D points by toggling the corresponding LED."""
+        if self.placement_mode_active:
+            self.placement_selection = {led_id}
+            self.visualizer_3d_widget.set_active_leds(self.placement_selection)
+            self._update_placement_selection_display()
+            return
         turn_on = led_id not in self.status_table.manual_on_leds
         # Update table state (emits led_toggle_requested which routes to set_individual_led)
         self.status_table.set_led_state(led_id, turn_on)

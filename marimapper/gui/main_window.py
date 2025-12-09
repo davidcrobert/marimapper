@@ -926,10 +926,20 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
-            camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put(CameraCommand.SET_DARK)
-            self.log_widget.log_info("Camera set to DARK mode")
+            if self.camera_count == 1:
+                # Single camera mode
+                from marimapper.detector_process import CameraCommand
+                camera_queue = self.scanner.get_camera_command_queue()
+                camera_queue.put(CameraCommand.SET_DARK)
+                self.log_widget.log_info("Camera set to DARK mode")
+            else:
+                # Multi-camera mode: broadcast to all workers
+                for i in range(self.camera_count):
+                    worker_queue = self.scanner.get_worker_command_queue(i)
+                    if worker_queue is not None:
+                        worker_queue.put(("SET_DARK",))
+                self.log_widget.log_info(f"All {self.camera_count} cameras set to DARK mode")
+
             self.statusBar().showMessage("Camera: Dark mode")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set dark mode: {str(e)}")
@@ -942,10 +952,20 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
-            camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put(CameraCommand.SET_BRIGHT)
-            self.log_widget.log_info("Camera set to BRIGHT mode")
+            if self.camera_count == 1:
+                # Single camera mode
+                from marimapper.detector_process import CameraCommand
+                camera_queue = self.scanner.get_camera_command_queue()
+                camera_queue.put(CameraCommand.SET_BRIGHT)
+                self.log_widget.log_info("Camera set to BRIGHT mode")
+            else:
+                # Multi-camera mode: broadcast to all workers
+                for i in range(self.camera_count):
+                    worker_queue = self.scanner.get_worker_command_queue(i)
+                    if worker_queue is not None:
+                        worker_queue.put(("SET_BRIGHT",))
+                self.log_widget.log_info(f"All {self.camera_count} cameras set to BRIGHT mode")
+
             self.statusBar().showMessage("Camera: Bright mode")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set bright mode: {str(e)}")
@@ -958,10 +978,20 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
-            camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put((CameraCommand.SET_THRESHOLD, value))
-            self.log_widget.log_info(f"Detection threshold set to {value}")
+            if self.camera_count == 1:
+                # Single camera mode
+                from marimapper.detector_process import CameraCommand
+                camera_queue = self.scanner.get_camera_command_queue()
+                camera_queue.put((CameraCommand.SET_THRESHOLD, value))
+                self.log_widget.log_info(f"Detection threshold set to {value}")
+            else:
+                # Multi-camera mode: broadcast to all workers
+                for i in range(self.camera_count):
+                    worker_queue = self.scanner.get_worker_command_queue(i)
+                    if worker_queue is not None:
+                        worker_queue.put(("SET_THRESHOLD", value))
+                self.log_widget.log_info(f"Threshold set to {value} for all {self.camera_count} cameras")
+
             self.statusBar().showMessage(f"Threshold: {value}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set threshold: {str(e)}")

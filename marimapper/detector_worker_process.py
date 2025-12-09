@@ -333,6 +333,31 @@ class DetectorWorkerProcess(Process):
                                 f"resolution {mask_res}, masked pixels: {masked_pixels}"
                             )
 
+                elif msg_type == "SET_DARK":
+                    # Set camera to dark exposure mode
+                    try:
+                        set_cam_dark(cam, self.dark_exposure)
+                        cam.eat()  # Flush buffered frames
+                        logger.info(f"Camera {self.camera_id}: Set to DARK mode")
+                    except Exception as e:
+                        logger.warning(f"Camera {self.camera_id}: Failed to set dark mode: {e}")
+
+                elif msg_type == "SET_BRIGHT":
+                    # Set camera to bright/default exposure mode
+                    try:
+                        set_cam_default(cam)
+                        cam.eat()  # Flush buffered frames
+                        logger.info(f"Camera {self.camera_id}: Set to BRIGHT mode")
+                    except Exception as e:
+                        logger.warning(f"Camera {self.camera_id}: Failed to set bright mode: {e}")
+
+                elif msg_type == "SET_THRESHOLD":
+                    # Update detection threshold
+                    new_threshold = msg[1] if len(msg) > 1 else None
+                    if new_threshold is not None:
+                        self.threshold = new_threshold
+                        logger.info(f"Camera {self.camera_id}: Threshold set to {new_threshold}")
+
                 elif msg_type == "EXIT":
                     logger.info(f"Camera {self.camera_id}: Received EXIT")
                     break

@@ -69,6 +69,16 @@ class Visualizer3DWidget(QWidget):
         self.origin_marker: GLMeshItem | None = None
         self.axis_gizmo: GLLinePlotItem | None = None
         self.floor_marks: GLLinePlotItem | None = None
+        self.gizmo_item: GLLinePlotItem | None = None
+        self.gizmo_enabled: bool = False
+        self.gizmo_anchor: np.ndarray | None = None
+        self.gizmo_axis_len: float = 1.5
+        self.gizmo_selection_ids: set[int] = set()
+        self.gizmo_selection_indices: list[int] = []
+        self._gizmo_dragging: bool = False
+        self._gizmo_active_axis: str | None = None
+        self._gizmo_start_mouse: np.ndarray | None = None
+        self._gizmo_start_positions: np.ndarray | None = None
         self.id_to_index: dict[int, int] = {}
         self.base_positions: np.ndarray | None = None
         self.working_positions: np.ndarray | None = None
@@ -129,6 +139,7 @@ class Visualizer3DWidget(QWidget):
         # Route mouse events for hover/pick handling
         self.view.mouseMoveEvent = self._wrapped_mouse_move(self.view.mouseMoveEvent)
         self.view.mousePressEvent = self._wrapped_mouse_press(self.view.mousePressEvent)
+        self.view.mouseReleaseEvent = self._wrapped_mouse_release(self.view.mouseReleaseEvent)
         self.view.keyPressEvent = self._wrapped_key_press(self.view.keyPressEvent)
 
         self._add_floor()
@@ -138,12 +149,31 @@ class Visualizer3DWidget(QWidget):
     def _wrapped_mouse_move(self, original_handler):
         def handler(ev):
             self._handle_hover(ev)
+            if self._gizmo_dragging:
+                self._handle_gizmo_drag(ev)
+                return
             return original_handler(ev)
         return handler
 
     def _wrapped_mouse_press(self, original_handler):
         def handler(ev):
+            if self._gizmo_enabled_and_ready():
+                picked = self._handle_gizmo_press(ev)
+                if picked:
+                    ev.accept()
+                    return
             self._handle_click(ev)
+            return original_handler(ev)
+        return handler
+
+    def _wrapped_mouse_release(self, original_handler):
+        def handler(ev):
+            if self._gizmo_dragging:
+                self._gizmo_dragging = False
+                self._gizmo_active_axis = None
+                self._gizmo_start_mouse = None
+                self._gizmo_start_positions = None
+                return
             return original_handler(ev)
         return handler
 
@@ -237,22 +267,8 @@ class Visualizer3DWidget(QWidget):
         if points.size == 0:
             return points
 
-        # Scale
-        sx, sy, sz = self.current_transform["scale"]
-        scaled = points * np.array([sx, sy, sz])
-
-        # Rotation (degrees to radians)
-        rx, ry, rz = [np.deg2rad(v) for v in self.current_transform["rotation"]]
-        cx, sx_sin = np.cos(rx), np.sin(rx)
-        cy, sy_sin = np.cos(ry), np.sin(ry)
-        cz, sz_sin = np.cos(rz), np.sin(rz)
-
-        rx_mat = np.array([[1, 0, 0], [0, cx, -sx_sin], [0, sx_sin, cx]])
-        ry_mat = np.array([[cy, 0, sy_sin], [0, 1, 0], [-sy_sin, 0, cy]])
-        rz_mat = np.array([[cz, -sz_sin, 0], [sz_sin, cz, 0], [0, 0, 1]])
-
-        # Apply in X->Y->Z order: Rz * Ry * Rx * p
-        rot_mat = rz_mat @ ry_mat @ rx_mat
+        rot_mat, scale_vec = self._rotation_matrix_and_scale()
+        scaled = points * scale_vec
         rotated = scaled @ rot_mat.T
 
         # Translation
@@ -267,15 +283,7 @@ class Visualizer3DWidget(QWidget):
         normals = self._working_normals_array()
         if normals.size == 0:
             return normals
-        # Rotate normals, do not translate or scale (assume uniform scale)
-        rx, ry, rz = [np.deg2rad(v) for v in self.current_transform["rotation"]]
-        cx, sx_sin = np.cos(rx), np.sin(rx)
-        cy, sy_sin = np.cos(ry), np.sin(ry)
-        cz, sz_sin = np.cos(rz), np.sin(rz)
-        rx_mat = np.array([[1, 0, 0], [0, cx, -sx_sin], [0, sx_sin, cx]])
-        ry_mat = np.array([[cy, 0, sy_sin], [0, 1, 0], [-sy_sin, 0, cy]])
-        rz_mat = np.array([[cz, -sz_sin, 0], [sz_sin, cz, 0], [0, 0, 1]])
-        rot_mat = rz_mat @ ry_mat @ rx_mat
+        rot_mat, _ = self._rotation_matrix_and_scale()
         return normals @ rot_mat.T
 
     def _point_size_from_scale(self) -> float:
@@ -407,6 +415,7 @@ class Visualizer3DWidget(QWidget):
         self.working_normals = np.array(self.base_normals, copy=True)
 
         self._refresh_view()
+        self._update_gizmo_geometry()
 
     def _update_lines(self, positions: np.ndarray | None = None):
         if not PG_AVAILABLE or not self.leds_3d:
@@ -451,6 +460,8 @@ class Visualizer3DWidget(QWidget):
     def _handle_hover(self, ev):
         """Find nearest point in screen space and highlight it."""
         if not PG_AVAILABLE or self.scatter is None or not self.leds_3d:
+            return
+        if self._gizmo_dragging:
             return
 
         idx = self._pick_index(ev, verbose=False)
@@ -574,6 +585,7 @@ class Visualizer3DWidget(QWidget):
         else:
             self.working_positions = np.array(positions, dtype=float, copy=True)
         self._refresh_view()
+        self._update_gizmo_geometry()
 
     def reset_working_positions(self):
         """Restore working positions from base/original positions."""
@@ -581,6 +593,7 @@ class Visualizer3DWidget(QWidget):
             return
         self.working_positions = np.array(self.base_positions, copy=True)
         self._refresh_view()
+        self._update_gizmo_geometry()
 
     def nudge_working_leds(self, led_ids: set[int], delta: tuple[float, float, float]) -> bool:
         """Nudge selected LEDs in working buffer by delta (world space)."""
@@ -617,6 +630,229 @@ class Visualizer3DWidget(QWidget):
         normals = np.array(self.working_normals if self.working_normals is not None else self.base_normals, copy=True)
         errors = np.array([getattr(led.point, "error", 0.0) for led in self.leds_3d], dtype=float)
         return ids, positions, normals, errors
+
+    def set_gizmo_enabled(self, enabled: bool):
+        """Toggle gizmo rendering/interaction (placement mode)."""
+        self.gizmo_enabled = enabled
+        if not enabled:
+            self._gizmo_dragging = False
+            self._gizmo_active_axis = None
+            self.gizmo_selection_ids = set()
+            self.gizmo_selection_indices = []
+            self._remove_gizmo()
+        self._update_gizmo_geometry()
+
+    def set_selection_ids(self, ids: set[int] | None):
+        """Update selection for gizmo anchoring/highlight."""
+        self.gizmo_selection_ids = set(ids) if ids else set()
+        self.gizmo_selection_indices = [self.id_to_index[i] for i in self.gizmo_selection_ids if i in self.id_to_index]
+        self._update_gizmo_anchor()
+        self._update_gizmo_geometry()
+
+    def _update_gizmo_anchor(self):
+        if not self.gizmo_selection_indices or self.working_positions is None:
+            self.gizmo_anchor = None
+            return
+        pts = np.array([self.working_positions[i] for i in self.gizmo_selection_indices], dtype=float)
+        self.gizmo_anchor = np.mean(pts, axis=0)
+
+    def _remove_gizmo(self):
+        if self.gizmo_item is not None:
+            try:
+                self.view.removeItem(self.gizmo_item)
+            except Exception:
+                pass
+            self.gizmo_item = None
+
+    def _update_gizmo_geometry(self):
+        """Draw/refresh gizmo lines at the current anchor."""
+        if not PG_AVAILABLE or not self.gizmo_enabled or self.gizmo_anchor is None:
+            self._remove_gizmo()
+            return
+
+        dist = float(self.view.opts.get("distance", 20))
+        _, scale_vec = self._rotation_matrix_and_scale()
+        avg_scale = max(1e-3, float(np.mean(np.abs(scale_vec))))
+        self.gizmo_axis_len = max(0.4, (dist * 0.1) / avg_scale)
+        a = self.gizmo_anchor
+        axis_len = self.gizmo_axis_len
+        # Build in working space, then apply current transform before mapping to view
+        axes_world = np.array(
+            [
+                a, a + np.array([axis_len, 0, 0]),  # X
+                a, a + np.array([0, axis_len, 0]),  # Y
+                a, a + np.array([0, 0, axis_len]),  # Z
+            ],
+            dtype=float,
+        )
+        axes_world = self._apply_transform(axes_world)
+        axes_view = self._to_view_space(axes_world)
+        colors = np.array(
+            [
+                [1.0, 0.2, 0.2, 1.0],
+                [1.0, 0.2, 0.2, 1.0],
+                [0.3, 1.0, 0.3, 1.0],
+                [0.3, 1.0, 0.3, 1.0],
+                [0.2, 0.5, 1.0, 1.0],
+                [0.2, 0.5, 1.0, 1.0],
+            ],
+            dtype=float,
+        )
+        if self.gizmo_item is None:
+            self.gizmo_item = GLLinePlotItem(pos=axes_view, color=colors, width=6, antialias=True, mode='lines')
+            self.view.addItem(self.gizmo_item)
+        else:
+            self.gizmo_item.setData(pos=axes_view, color=colors)
+
+    def _gizmo_enabled_and_ready(self) -> bool:
+        return self.gizmo_enabled and self.gizmo_anchor is not None and bool(self.gizmo_selection_indices)
+
+    def _handle_gizmo_press(self, ev):
+        pick = self._pick_gizmo_axis(ev)
+        if pick is None:
+            return False
+        self._gizmo_dragging = True
+        self._gizmo_active_axis = pick
+        self._gizmo_start_mouse = self._event_mouse_pos(ev)
+        self._gizmo_start_positions = np.array(self.working_positions, copy=True) if self.working_positions is not None else None
+        return True
+
+    def _handle_gizmo_drag(self, ev):
+        if not (self._gizmo_dragging and self._gizmo_active_axis and self._gizmo_start_mouse is not None):
+            return
+        if self._gizmo_start_positions is None or self.working_positions is None:
+            return
+        delta = self._compute_gizmo_axis_delta(ev, self._gizmo_active_axis)
+        if delta is None:
+            return
+        new_positions = np.array(self._gizmo_start_positions, copy=True)
+        for idx in self.gizmo_selection_indices:
+            new_positions[idx] = self._gizmo_start_positions[idx] + delta
+        self.set_working_positions(new_positions)
+        self._update_gizmo_anchor()
+        self._update_gizmo_geometry()
+
+    def _event_mouse_pos(self, ev) -> np.ndarray:
+        dpr = float(self.view.devicePixelRatioF())
+        return np.array([ev.position().x() * dpr, ev.position().y() * dpr], dtype=float)
+
+    def _pick_gizmo_axis(self, ev) -> str | None:
+        mats = self._get_mvp()
+        if mats is None or self.gizmo_anchor is None:
+            return None
+        viewport, mvp, width, height, dpr = mats
+        anchor_world = self._apply_transform(self.gizmo_anchor.reshape(1, 3))[0]
+        axis_len = self.gizmo_axis_len
+        axes = {
+            "x": np.array([axis_len, 0, 0], dtype=float),
+            "y": np.array([0, axis_len, 0], dtype=float),
+            "z": np.array([0, 0, axis_len], dtype=float),
+        }
+        mouse = self._event_mouse_pos(ev)
+        best_axis = None
+        best_dist = 1e9
+        for axis_name, vec in axes.items():
+            p0 = anchor_world
+            p1 = self._apply_transform(np.array([self.gizmo_anchor + vec], dtype=float))[0]
+            pts = self._to_view_space(np.vstack([p0, p1]))
+            screen = self._project_points_to_screen(pts, viewport, mvp, width, height, dpr)
+            if screen.shape[0] < 2 or np.any(~np.isfinite(screen)):
+                continue
+            a, b = screen[0], screen[1]
+            seg = b - a
+            seg_len = np.linalg.norm(seg)
+            if seg_len < 1e-3:
+                continue
+            t = np.clip(np.dot(mouse - a, seg) / (seg_len ** 2), 0.0, 1.0)
+            proj = a + t * seg
+            dist = np.linalg.norm(mouse - proj)
+            if dist < best_dist:
+                best_dist = dist
+                best_axis = axis_name
+        if best_dist < 40.0:
+            return best_axis
+        return None
+
+    def _compute_gizmo_axis_delta(self, ev, axis: str) -> np.ndarray | None:
+        mats = self._get_mvp()
+        if mats is None or self.gizmo_anchor is None:
+            return None
+        viewport, mvp, width, height, dpr = mats
+        rot_mat, scale_vec = self._rotation_matrix_and_scale()
+        anchor_world = self._apply_transform(self.gizmo_anchor.reshape(1, 3))[0]
+        axis_len = self.gizmo_axis_len
+        axis_dir_local = {
+            "x": np.array([1.0, 0.0, 0.0]),
+            "y": np.array([0.0, 1.0, 0.0]),
+            "z": np.array([0.0, 0.0, 1.0]),
+        }.get(axis)
+        if axis_dir_local is None:
+            return None
+
+        axis_dir_disp = rot_mat @ (axis_dir_local * scale_vec)
+        p0 = anchor_world
+        p1 = self._apply_transform(np.array([self.gizmo_anchor + axis_dir_local * axis_len], dtype=float))[0]
+        pts = self._to_view_space(np.vstack([p0, p1]))
+        screen = self._project_points_to_screen(pts, viewport, mvp, width, height, dpr)
+        if screen.shape[0] < 2 or np.any(~np.isfinite(screen)):
+            return None
+        a, b = screen[0], screen[1]
+        seg = b - a
+        seg_len = np.linalg.norm(seg)
+        if seg_len < 1e-3:
+            return None
+        mouse = self._event_mouse_pos(ev)
+        mouse_delta = mouse - self._gizmo_start_mouse
+        seg_dir = seg / seg_len
+        proj = np.dot(mouse_delta, seg_dir)
+        world_scale = axis_len / seg_len
+        delta_mag = proj * world_scale
+
+        # Convert display-space delta back to working space (undo rotation/scale)
+        delta_disp = axis_dir_disp * delta_mag
+        with np.errstate(divide="ignore", invalid="ignore"):
+            inv_scale = np.where(scale_vec != 0, 1.0 / scale_vec, 0.0)
+        delta_working = rot_mat.T @ delta_disp
+        delta_working = delta_working * inv_scale
+        return delta_working
+
+    def _project_points_to_screen(self, pts: np.ndarray, viewport, mvp, width: float, height: float, dpr: float) -> np.ndarray:
+        screen_pts = np.full((len(pts), 2), np.nan, dtype=float)
+        for i, p in enumerate(pts):
+            v = mvp * QVector4D(float(p[0]), float(p[1]), float(p[2]), 1.0)
+            w = v.w()
+            if w == 0:
+                continue
+            x_ndc = v.x() / w
+            y_ndc = v.y() / w
+            screen_pts[i, 0] = (x_ndc + 1.0) * 0.5 * width
+            screen_pts[i, 1] = (1.0 - y_ndc) * 0.5 * height
+        return screen_pts
+
+    def _get_mvp(self):
+        try:
+            viewport = self.view.getViewport()
+            proj = self.view.projectionMatrix(viewport, viewport)
+            view = self.view.viewMatrix()
+            mvp = proj * view
+        except Exception:
+            return None
+        dpr = float(self.view.devicePixelRatioF())
+        width = max(1.0, self.view.width() * dpr)
+        height = max(1.0, self.view.height() * dpr)
+        return viewport, mvp, width, height, dpr
+
+    def _rotation_matrix_and_scale(self):
+        rx, ry, rz = [np.deg2rad(v) for v in self.current_transform["rotation"]]
+        cx, sx_sin = np.cos(rx), np.sin(rx)
+        cy, sy_sin = np.cos(ry), np.sin(ry)
+        cz, sz_sin = np.cos(rz), np.sin(rz)
+        rx_mat = np.array([[1, 0, 0], [0, cx, -sx_sin], [0, sx_sin, cx]])
+        ry_mat = np.array([[cy, 0, sy_sin], [0, 1, 0], [-sy_sin, 0, cy]])
+        rz_mat = np.array([[cz, -sz_sin, 0], [sz_sin, cz, 0], [0, 0, 1]])
+        rot_mat = rz_mat @ ry_mat @ rx_mat
+        scale_vec = np.array(self.current_transform["scale"], dtype=float)
+        return rot_mat, scale_vec
 
     def set_hint_text(self, text: str | None):
         """Show or hide the hint banner above the view."""

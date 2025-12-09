@@ -356,6 +356,7 @@ class MainWindow(QMainWindow):
         self.placement_toggle_btn.setChecked(True)
         self.placement_toggle_btn.blockSignals(False)
         self.placement_toggle_btn.setText("Exit Placement Mode")
+        self.visualizer_3d_widget.set_gizmo_enabled(True)
 
         # Bias space toward the 3D viewport
         self.left_splitter.setSizes([max(self.width() - 200, 800), 0])
@@ -381,6 +382,7 @@ class MainWindow(QMainWindow):
         self.placement_toggle_btn.setChecked(False)
         self.placement_toggle_btn.blockSignals(False)
         self.placement_toggle_btn.setText("Enter Placement Mode")
+        self.visualizer_3d_widget.set_gizmo_enabled(False)
 
         if self._pre_placement_layout:
             try:
@@ -452,6 +454,7 @@ class MainWindow(QMainWindow):
         self.placement_panel.set_dirty(False)
         self._update_placement_selection_display()
         self.statusBar().showMessage("Placement changes discarded (reset to original)")
+        self.visualizer_3d_widget.set_selection_ids(self.placement_selection if self.placement_mode_active else None)
 
     def _handle_placement_nudge(self, event) -> bool:
         """Keyboard nudges in placement mode (WASD/Arrows for X/Z, Q/E for Y)."""
@@ -481,6 +484,7 @@ class MainWindow(QMainWindow):
         if moved:
             self.placement_panel.set_dirty(True)
             self._update_placement_selection_display()
+            self.visualizer_3d_widget.set_selection_ids(self.placement_selection)
         return moved
 
     def start_scanner_init(self):
@@ -739,6 +743,7 @@ class MainWindow(QMainWindow):
         if self.placement_mode_active:
             self.placement_selection = {led_id}
             self.visualizer_3d_widget.set_active_leds(self.placement_selection)
+            self.visualizer_3d_widget.set_selection_ids(self.placement_selection)
             self._update_placement_selection_display()
             return
         turn_on = led_id not in self.status_table.manual_on_leds

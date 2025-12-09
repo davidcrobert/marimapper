@@ -8,6 +8,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QVector4D, QFont
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from marimapper.led import LED3D
 
 IMPORT_ERROR_MSG = None
 try:
@@ -630,6 +631,30 @@ class Visualizer3DWidget(QWidget):
         normals = np.array(self.working_normals if self.working_normals is not None else self.base_normals, copy=True)
         errors = np.array([getattr(led.point, "error", 0.0) for led in self.leds_3d], dtype=float)
         return ids, positions, normals, errors
+
+    def add_placeholder_led(self, led_id: int, position: np.ndarray) -> bool:
+        """Append a synthetic LED (for problem placement) without resetting edits."""
+        if led_id in self.id_to_index:
+            return False
+        if self.base_positions is None or self.working_positions is None:
+            return False
+        try:
+            led = LED3D(led_id)
+            led.point.position = np.array(position, dtype=float)
+            led.point.normal = np.array([0.0, 1.0, 0.0], dtype=float)
+            led.point.error = 0.0
+            self.leds_3d.append(led)
+            self.id_to_index[led_id] = len(self.leds_3d) - 1
+            self.base_positions = np.vstack([self.base_positions, led.point.position])
+            self.working_positions = np.vstack([self.working_positions, led.point.position])
+            self.base_normals = np.vstack([self.base_normals, led.point.normal]) if self.base_normals is not None else np.array([led.point.normal])
+            self.working_normals = np.vstack([self.working_normals, led.point.normal]) if self.working_normals is not None else np.array([led.point.normal])
+            self._refresh_view()
+            self._update_gizmo_anchor()
+            self._update_gizmo_geometry()
+            return True
+        except Exception:
+            return False
 
     def set_gizmo_enabled(self, enabled: bool):
         """Toggle gizmo rendering/interaction (placement mode)."""

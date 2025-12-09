@@ -571,3 +571,9 @@ class StatusTable(QWidget):
         self._refresh_table()
         self.manual_selection_changed.emit(set(self.manual_on_leds))
         self.led_toggle_requested.emit(led_id, turn_on)
+
+    def get_problem_led_ids(self) -> list[int]:
+        """Return LED IDs considered problematic (pending or failed reconstruction)."""
+        problem_statuses = {"UNRECONSTRUCTABLE", "DETECTED", "NONE"}
+        ids = [led_id for led_id, info in self.led_data.items() if getattr(info, "name", "") in problem_statuses]
+        return sorted(ids)

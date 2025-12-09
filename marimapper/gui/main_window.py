@@ -10,6 +10,7 @@ from pathlib import Path
 import csv
 import cv2
 import json
+import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -112,7 +113,9 @@ class MainWindow(QMainWindow):
         self.init_thread = None
         self.placement_mode_active = False
         self.placement_selection: set[int] = set()
+        self.problem_ids: list[int] = []
         self._pre_placement_layout = None
+        self.leds_3d_data = []
         self.current_view_id = 0
         self.is_video_maximized = False
 
@@ -196,6 +199,10 @@ class MainWindow(QMainWindow):
         self.placement_panel.exit_requested.connect(self.exit_placement_mode)
         self.placement_panel.commit_requested.connect(self.on_placement_commit)
         self.placement_panel.discard_requested.connect(self.on_placement_discard)
+        self.placement_panel.problem_selected.connect(self._on_problem_selected)
+        self.placement_panel.next_problem_requested.connect(self._on_next_problem_requested)
+        self.placement_panel.place_problem_requested.connect(self._on_place_problem_requested)
+        self.placement_panel.interpolate_requested.connect(self._on_interpolate_problem_leds)
         right_layout.addWidget(self.placement_panel)
 
         # LED status table
@@ -302,8 +309,8 @@ class MainWindow(QMainWindow):
         self.signals.log_message.connect(self.log_widget.add_message)
         self.signals.scan_completed.connect(self.on_scan_completed)
         self.signals.scan_failed.connect(self.on_scan_failed)
-        self.signals.reconstruction_updated.connect(self.status_table.update_led_info)
-        self.signals.points_3d_updated.connect(self.visualizer_3d_widget.update_3d_data)
+        self.signals.reconstruction_updated.connect(self.on_reconstruction_updated)
+        self.signals.points_3d_updated.connect(self.on_points_3d_updated)
         self.visualizer_3d_widget.led_clicked.connect(self.on_visualizer_led_clicked)
 
         # Transform controls
@@ -357,6 +364,7 @@ class MainWindow(QMainWindow):
         self.placement_toggle_btn.blockSignals(False)
         self.placement_toggle_btn.setText("Exit Placement Mode")
         self.visualizer_3d_widget.set_gizmo_enabled(True)
+        self._refresh_problem_list()
 
         # Bias space toward the 3D viewport
         self.left_splitter.setSizes([max(self.width() - 200, 800), 0])
@@ -406,6 +414,11 @@ class MainWindow(QMainWindow):
             self.exit_placement_mode()
             event.accept()
             return
+        if self.placement_mode_active and event.key() == Qt.Key.Key_Tab:
+            forward = not bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if self._select_next_problem(forward):
+                event.accept()
+                return
         if self.placement_mode_active and self._handle_placement_nudge(event):
             event.accept()
             return
@@ -414,6 +427,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot(object)
     def on_visualizer_key(self, event):
         """React to key presses that hit the 3D view (for placement nudges)."""
+        if self.placement_mode_active and event.key() == Qt.Key.Key_Tab:
+            forward = not bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if self._select_next_problem(forward):
+                event.accept()
+                return
         if self.placement_mode_active and self._handle_placement_nudge(event):
             event.accept()
             return
@@ -424,6 +442,7 @@ class MainWindow(QMainWindow):
             return
         if not self.placement_selection:
             self.placement_panel.set_selected_led(None)
+            self.placement_panel.select_problem_id(None)
             return
         led_id = next(iter(self.placement_selection))
         pos = None
@@ -436,6 +455,7 @@ class MainWindow(QMainWindow):
             except ValueError:
                 pos = None
         self.placement_panel.set_selected_led(led_id, pos)
+        self.placement_panel.select_problem_id(led_id if led_id in self.problem_ids else None)
 
     @pyqtSlot()
     def on_placement_commit(self):
@@ -443,6 +463,8 @@ class MainWindow(QMainWindow):
         self.save_transformed_cloud()
         self.placement_panel.set_dirty(False)
         self.statusBar().showMessage("Placement committed")
+        self._prune_solved_problems()
+
 
     @pyqtSlot()
     def on_placement_discard(self):
@@ -455,6 +477,21 @@ class MainWindow(QMainWindow):
         self._update_placement_selection_display()
         self.statusBar().showMessage("Placement changes discarded (reset to original)")
         self.visualizer_3d_widget.set_selection_ids(self.placement_selection if self.placement_mode_active else None)
+
+    @pyqtSlot(dict)
+    def on_reconstruction_updated(self, led_info_dict):
+        """Update status table and problem list when reconstruction changes."""
+        self.status_table.update_led_info(led_info_dict)
+        self._refresh_problem_list()
+
+    @pyqtSlot(list)
+    def on_points_3d_updated(self, leds_3d):
+        """Store 3D data and forward to visualizer."""
+        try:
+            self.leds_3d_data = list(leds_3d)
+        except Exception:
+            self.leds_3d_data = []
+        self.visualizer_3d_widget.update_3d_data(leds_3d)
 
     def _handle_placement_nudge(self, event) -> bool:
         """Keyboard nudges in placement mode (WASD/Arrows for X/Z, Q/E for Y)."""
@@ -486,6 +523,176 @@ class MainWindow(QMainWindow):
             self._update_placement_selection_display()
             self.visualizer_3d_widget.set_selection_ids(self.placement_selection)
         return moved
+
+    def _refresh_problem_list(self):
+        """Refresh the problem list in placement panel based on status table data."""
+        try:
+            ids = self.status_table.get_problem_led_ids()
+        except Exception:
+            ids = []
+        self.problem_ids = ids
+        if self.placement_mode_active:
+            self.placement_panel.set_problem_ids(ids)
+            # keep selection highlight consistent
+            if self.placement_selection:
+                current = next(iter(self.placement_selection))
+                self.placement_panel.select_problem_id(current if current in ids else None)
+
+    @pyqtSlot(int)
+    def _on_problem_selected(self, led_id: int):
+        """Select a problem LED from the list."""
+        if not self.placement_mode_active:
+            return
+        self._set_placement_selection(led_id)
+
+    @pyqtSlot(bool)
+    def _on_next_problem_requested(self, forward: bool):
+        self._select_next_problem(forward)
+
+    @pyqtSlot(int)
+    def _on_place_problem_requested(self, led_id: int):
+        """Focus selection on a problem LED (same as selecting it)."""
+        self._ensure_problem_placeholder(led_id)
+        self._set_placement_selection(led_id)
+
+    def _select_next_problem(self, forward: bool = True) -> bool:
+        """Select next/previous problem LED. Returns True if selection changed."""
+        if not self.problem_ids:
+            return False
+        if not self.placement_selection:
+            target = self.problem_ids[0] if forward else self.problem_ids[-1]
+        else:
+            current = next(iter(self.placement_selection))
+            if current in self.problem_ids:
+                idx = self.problem_ids.index(current)
+                idx = (idx + (1 if forward else -1)) % len(self.problem_ids)
+                target = self.problem_ids[idx]
+            else:
+                target = self.problem_ids[0] if forward else self.problem_ids[-1]
+        self._set_placement_selection(target)
+        return True
+
+    def _set_placement_selection(self, led_id: int | None):
+        """Helper to update placement selection, visuals, and gizmo anchor."""
+        if led_id is None:
+            self.placement_selection = set()
+        else:
+            self.placement_selection = {led_id}
+        self.visualizer_3d_widget.set_active_leds(self.placement_selection)
+        self.visualizer_3d_widget.set_selection_ids(self.placement_selection)
+        self._update_placement_selection_display()
+
+    def _ensure_problem_placeholder(self, led_id: int):
+        """If a problem LED lacks a 3D point, seed it near neighbors so it can be placed."""
+        if led_id in self.visualizer_3d_widget.id_to_index:
+            return
+        guess = self._guess_position_for_led(led_id)
+        if guess is not None:
+            self.visualizer_3d_widget.add_placeholder_led(led_id, guess)
+
+    def _guess_position_for_led(self, led_id: int):
+        """Guess an initial position using nearby known LEDs by ID; fallback to centroid."""
+        export = self.visualizer_3d_widget.export_working_leds()
+        if not export:
+            return np.array([0.0, 0.0, 0.0], dtype=float)
+        ids, positions, _, _ = export
+        if not ids or len(ids) == 0:
+            return np.array([0.0, 0.0, 0.0], dtype=float)
+        id_pos = list(zip(ids, positions))
+        id_pos = [ip for ip in id_pos if ip[1] is not None]
+        # Sort by absolute ID distance
+        id_pos.sort(key=lambda ip: abs(ip[0] - led_id))
+        if id_pos:
+            nearest = id_pos[:2]
+            pts = np.array([p for _, p in nearest], dtype=float)
+            return np.mean(pts, axis=0)
+        return np.mean(np.array(positions, dtype=float), axis=0)
+
+    @pyqtSlot()
+    def _on_interpolate_problem_leds(self):
+        """Linearly interpolate problem LEDs between known anchors."""
+        if not self.problem_ids:
+            self.log_widget.log_info("No problem LEDs to interpolate.")
+            return
+        export = self.visualizer_3d_widget.export_working_leds()
+        if not export:
+            self.log_widget.log_warning("No 3D data available for interpolation.")
+            return
+        ids, positions, _, _ = export
+        if not ids:
+            self.log_widget.log_warning("No 3D data available for interpolation.")
+            return
+
+        id_to_idx = dict(zip(ids, range(len(ids))))
+        positions = np.array(positions, copy=True, dtype=float)
+
+        # Anchors: non-problem IDs with finite positions
+        anchors = [(i, positions[id_to_idx[i]]) for i in ids if i not in self.problem_ids and i in id_to_idx]
+        anchors = [(idx, pos) for idx, pos in anchors if np.all(np.isfinite(pos))]
+        anchors.sort(key=lambda a: a[0])
+
+        if len(anchors) < 2:
+            self.log_widget.log_warning("Not enough anchor LEDs to interpolate (need at least 2 non-problem points).")
+            return
+
+        # Collect interpolations
+        changes = []
+        for a, b in zip(anchors[:-1], anchors[1:]):
+            idx_a, pos_a = a
+            idx_b, pos_b = b
+            gap = idx_b - idx_a - 1
+            if gap <= 0:
+                continue
+            for k in range(1, gap + 1):
+                target_id = idx_a + k
+                if target_id not in self.problem_ids:
+                    continue
+                t = k / float(gap + 1)
+                interp = pos_a + (pos_b - pos_a) * t
+                changes.append((target_id, interp))
+
+        if not changes:
+            self.log_widget.log_info("No problem LEDs fell between known anchors; nothing interpolated.")
+            return
+
+        # Apply changes, inserting placeholders if needed
+        for led_id, pos in changes:
+            if led_id in id_to_idx:
+                positions[id_to_idx[led_id]] = pos
+            else:
+                # add placeholder LED to visualizer and mapping
+                if self.visualizer_3d_widget.add_placeholder_led(led_id, pos):
+                    ids = ids + [led_id]
+                    positions = np.vstack([positions, pos])
+                    id_to_idx[led_id] = len(ids) - 1
+
+        # Ensure working positions updated in visualizer
+        self.visualizer_3d_widget.set_working_positions(positions)
+        self.placement_panel.set_dirty(True)
+        self.log_widget.log_success(f"Interpolated {len(changes)} problem LEDs between known anchors.")
+
+    def _prune_solved_problems(self):
+        """Remove any problem IDs that now have positions (e.g., after commit)."""
+        export = self.visualizer_3d_widget.export_working_leds()
+        if not export:
+            return
+        ids, positions, _, _ = export
+        if ids is None or positions is None:
+            return
+        solved = []
+        for pid in self.problem_ids:
+            try:
+                idx = ids.index(pid)
+                pos = positions[idx]
+                if pos is not None and np.all(np.isfinite(pos)):
+                    solved.append(pid)
+            except ValueError:
+                continue
+        if not solved:
+            return
+        self.problem_ids = [pid for pid in self.problem_ids if pid not in solved]
+        if self.placement_mode_active:
+            self.placement_panel.set_problem_ids(self.problem_ids)
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""
@@ -1319,9 +1526,16 @@ class MainWindow(QMainWindow):
 
             # Update 3D visualization
             if leds_3d and len(leds_3d) > 0:
+                try:
+                    self.leds_3d_data = list(leds_3d)
+                except Exception:
+                    self.leds_3d_data = leds_3d
                 self.visualizer_3d_widget.update_3d_data(leds_3d)
                 self.tab_widget.setCurrentIndex(1)  # Switch to 3D View
                 self.log_widget.log_info(f"Loaded {len(leds_3d)} 3D points from project")
+
+        # Refresh problem list based on latest status data
+        self._refresh_problem_list()
 
         # Load transform
         transform = self.project_manager.get_transform()

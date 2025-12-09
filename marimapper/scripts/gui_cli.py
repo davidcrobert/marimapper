@@ -77,6 +77,46 @@ def main():
             'password': args.axis_password,
         }
 
+    # Multi-camera configuration
+    axis_configs = None
+
+    if args.axis_cameras_json:
+        import json
+        try:
+            axis_configs = json.loads(args.axis_cameras_json)
+            if not isinstance(axis_configs, list):
+                raise Exception("--axis-cameras-json must be a JSON array")
+
+            # Validate and set defaults for each camera
+            for cfg in axis_configs:
+                if 'host' not in cfg:
+                    raise Exception("Each camera config must have 'host' field")
+                cfg.setdefault('username', 'root')
+                cfg.setdefault('password', '')
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON in --axis-cameras-json: {e}")
+
+    elif args.axis_hosts:
+        # Simple multi-camera: comma-separated hosts with shared credentials
+        hosts = [h.strip() for h in args.axis_hosts.split(',') if h.strip()]
+        if len(hosts) == 0:
+            raise Exception("--axis-hosts must contain at least one host")
+        if not args.axis_password:
+            raise Exception("--axis-password is required when using --axis-hosts")
+
+        axis_configs = [
+            {
+                'host': host,
+                'username': args.axis_username,
+                'password': args.axis_password,
+            }
+            for host in hosts
+        ]
+
+    # Validate camera count
+    if axis_configs is not None and len(axis_configs) > 9:
+        raise Exception(f"GUI supports maximum 9 cameras (you provided {len(axis_configs)})")
+
     # Create scanner args object that MainWindow expects
     class ScannerArgs:
         def __init__(self):
@@ -93,6 +133,7 @@ def main():
             self.check_movement = not args.disable_movement_check
             self.camera_model = args.camera_model
             self.axis_config = axis_config
+            self.axis_configs = axis_configs
 
     scanner_args = ScannerArgs()
 

@@ -71,6 +71,7 @@ class ScannerInitThread(QThread):
                 check_movement=self.scanner_args.check_movement,
                 camera_model_name=self.scanner_args.camera_model,
                 axis_config=self.scanner_args.axis_config,
+                axis_configs=self.scanner_args.axis_configs,
                 frame_queue=self.frame_queue,
             )
 
@@ -306,6 +307,7 @@ class MainWindow(QMainWindow):
 
         # Worker thread signals
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
+        self.signals.frame_ready_multi.connect(self.on_frame_ready_multi)
         self.signals.log_message.connect(self.log_widget.add_message)
         self.signals.scan_completed.connect(self.on_scan_completed)
         self.signals.scan_failed.connect(self.on_scan_failed)
@@ -773,31 +775,42 @@ class MainWindow(QMainWindow):
         self.log_widget.log_info(f"3D info queue created: {info_3d_queue is not None}")
         self.log_widget.log_info(f"3D data queue created: {data_3d_queue is not None}")
 
-        # Start status monitor thread
+        # Detect camera count for multi-camera support (do this early!)
+        if hasattr(scanner, "detector_workers") and scanner.detector_workers:
+            # Multi-camera mode
+            self.camera_count = len(scanner.detector_workers)
+            self.log_widget.log_info(f"Multi-camera mode detected: {self.camera_count} cameras")
+
+            # Get worker frame queues for multi-camera
+            frame_queues = [
+                scanner.get_worker_frame_queue(i)
+                for i in range(self.camera_count)
+            ]
+        else:
+            # Single camera mode
+            self.camera_count = 1
+            self.log_widget.log_info("Single camera mode")
+            frame_queues = self.frame_queue  # Single queue
+
+        # Start status monitor thread with appropriate frame queues
         self.monitor_thread = StatusMonitorThread(
-            self.signals, self.frame_queue, detector_update_queue, info_3d_queue, data_3d_queue
+            self.signals, frame_queues, detector_update_queue, info_3d_queue, data_3d_queue
         )
         self.monitor_thread.start()
 
         self.log_widget.log_info("Monitor thread started, watching for 3D info updates...")
 
         # Log diagnostic information
-        self.log_widget.log_info(f"Detector process alive: {scanner.detector.is_alive()}")
+        if self.camera_count == 1:
+            self.log_widget.log_info(f"Detector process alive: {scanner.detector.is_alive()}")
+        else:
+            alive_workers = sum(1 for w in scanner.detector_workers if w.is_alive())
+            self.log_widget.log_info(f"Detector workers alive: {alive_workers}/{self.camera_count}")
         self.log_widget.log_info(f"Frame queue created: {self.frame_queue is not None}")
 
         # Enable controls now that scanner is ready
         self.control_panel.start_button.setEnabled(True)
         self.statusBar().showMessage("Scanner ready")
-
-        # Detect camera count for multi-camera support
-        if hasattr(scanner, "detector_workers") and scanner.detector_workers:
-            # Multi-camera mode
-            self.camera_count = len(scanner.detector_workers)
-            self.log_widget.log_info(f"Multi-camera mode detected: {self.camera_count} cameras")
-        else:
-            # Single camera mode
-            self.camera_count = 1
-            self.log_widget.log_info("Single camera mode")
 
         # Initialize camera selector if multi-camera
         if self.camera_count > 1:
@@ -824,6 +837,20 @@ class MainWindow(QMainWindow):
             "Initialization Error",
             f"Failed to initialize scanner:\n{error_msg}\n\nPlease check camera and backend connections.",
         )
+
+    @pyqtSlot(int, object)
+    def on_frame_ready_multi(self, camera_index: int, frame):
+        """
+        Handle frame from multi-camera mode.
+
+        Args:
+            camera_index: Index of camera that produced this frame
+            frame: Video frame (numpy array)
+        """
+        # TODO: Once MultiCameraWidget is implemented, route to correct camera widget
+        # For now, just show camera 0's frames on the main detector widget
+        if camera_index == 0:
+            self.detector_widget.update_frame(frame)
 
     @pyqtSlot(int, int)
     def start_scan(self, led_from: int, led_to: int):

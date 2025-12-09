@@ -7,6 +7,7 @@ Qt signals for updating the GUI in a thread-safe manner.
 
 import time
 from multiprocessing import Queue
+from typing import Union, List
 from PyQt6.QtCore import QThread
 from marimapper.gui.signals import MariMapperSignals
 from marimapper.queues import Queue2D, DetectionControlEnum
@@ -23,7 +24,7 @@ class StatusMonitorThread(QThread):
     def __init__(
         self,
         signals: MariMapperSignals,
-        frame_queue: Queue,
+        frame_queues: Union[Queue, List[Queue]],
         detector_update_queue: Queue2D,
         info_3d_queue=None,
         data_3d_queue=None,
@@ -33,14 +34,22 @@ class StatusMonitorThread(QThread):
 
         Args:
             signals: MariMapperSignals object for emitting Qt signals
-            frame_queue: Queue containing video frames from detector
+            frame_queues: Single Queue or List[Queue] containing video frames from detector(s)
             detector_update_queue: Queue2D for detection status updates
             info_3d_queue: Queue3DInfo for 3D reconstruction status updates
             data_3d_queue: Queue3D for full 3D LED data (for visualization)
         """
         super().__init__()
         self.signals = signals
-        self.frame_queue = frame_queue
+
+        # Normalize frame_queues to list
+        if isinstance(frame_queues, list):
+            self.frame_queues = frame_queues
+            self.multi_camera = True
+        else:
+            self.frame_queues = [frame_queues]
+            self.multi_camera = False
+
         self.detector_update_queue = detector_update_queue
         self.info_3d_queue = info_3d_queue
         self.data_3d_queue = data_3d_queue
@@ -55,18 +64,25 @@ class StatusMonitorThread(QThread):
         while self.running:
             loop_count += 1
             try:
-                # Poll frame queue (non-blocking)
-                if not self.frame_queue.empty():
-                    try:
-                        frame = self.frame_queue.get_nowait()
-                        frame_count += 1
-                        if frame_count <= 3:  # Log first 3 frames
-                            self.signals.log_message.emit("info", f"Frame {frame_count} received: shape={frame.shape}")
-                        self.signals.frame_ready.emit(frame)
-                    except Exception as e:
-                        if frame_count == 0:  # Only log if we haven't received any frames yet
-                            self.signals.log_message.emit("warning", f"Error getting frame: {e}")
-                        pass  # Queue empty, ignore
+                # Poll all frame queues (non-blocking)
+                for camera_id, frame_queue in enumerate(self.frame_queues):
+                    if frame_queue is not None and not frame_queue.empty():
+                        try:
+                            frame = frame_queue.get_nowait()
+                            frame_count += 1
+                            if frame_count <= 3:  # Log first 3 frames
+                                cam_label = f"camera {camera_id}" if self.multi_camera else "camera"
+                                self.signals.log_message.emit("info", f"Frame {frame_count} received from {cam_label}: shape={frame.shape}")
+
+                            # Emit appropriate signal based on mode
+                            if self.multi_camera:
+                                self.signals.frame_ready_multi.emit(camera_id, frame)
+                            else:
+                                self.signals.frame_ready.emit(frame)
+                        except Exception as e:
+                            if frame_count == 0:  # Only log if we haven't received any frames yet
+                                self.signals.log_message.emit("warning", f"Error getting frame from camera {camera_id}: {e}")
+                            pass  # Queue empty, ignore
 
                 # Poll detector update queue (non-blocking)
                 if not self.detector_update_queue.empty():
@@ -136,8 +152,9 @@ class StatusMonitorThread(QThread):
 
                 # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)
                 if loop_count == 90 and frame_count == 0:
+                    queue_status = [q.empty() if q is not None else True for q in self.frame_queues]
                     self.signals.log_message.emit("warning",
-                        f"No frames received yet. Queue empty: {self.frame_queue.empty()}")
+                        f"No frames received yet. Queue(s) empty: {queue_status}")
 
                 # Sleep briefly to avoid busy-waiting
                 time.sleep(0.033)  # ~30 Hz polling rate

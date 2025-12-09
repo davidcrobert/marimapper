@@ -186,5 +186,6 @@ The Backend class only needs `get_led_count()` and `set_led(index, on)` methods.
 
 
 marimapper custom ./my_backend.py --axis-host 192.170.100.232 --axis-username root --axis-password hemmer
-marimapper-gui artnet --axis-host 192.170.100.232 --axis-username root --axis-password hemmer
-marimapper artnet --axis-hosts "192.170.100.232,192.170.100.242" --axis-username root --axis-password hemmer
+marimapper-gui artnet --axis-host 192.170.90.198 --axis-username root --axis-password hemmer
+marimapper artnet --axis-hosts "192.170.90.198,192.170.90.199" --axis-username root --axis-password hemmer
+marimapper-gui artnet --axis-hosts "192.170.90.198,192.170.90.199" --axis-password hemmer

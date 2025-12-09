@@ -14,6 +14,7 @@ class MariMapperSignals(QObject):
 
     # Frame from detector process (numpy array)
     frame_ready = pyqtSignal(np.ndarray)
+    frame_ready_multi = pyqtSignal(int, np.ndarray)  # camera_index, frame
 
     # LED detection signals
     led_detected = pyqtSignal(object)  # LED2D object

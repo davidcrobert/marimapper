@@ -852,6 +852,20 @@ class MainWindow(QMainWindow):
         self.multi_camera_widget.camera_selected.connect(self.on_camera_selected)
         self.multi_camera_widget.mask_updated.connect(self.on_mask_updated_multi)
 
+        # Reconnect mask control signals from detector_widget to multi_camera_widget
+        # (These were originally connected in _connect_signals to detector_widget)
+        try:
+            self.control_panel.paint_mode_toggled.disconnect(self.detector_widget.set_painting_mode)
+            self.control_panel.brush_size_changed.disconnect(self.detector_widget.set_brush_size)
+            self.control_panel.mask_visibility_toggled.disconnect(self.detector_widget.set_mask_visibility)
+            self.detector_widget.mask_updated.disconnect(self.on_mask_updated)
+        except Exception:
+            pass  # Ignore if already disconnected
+
+        self.control_panel.paint_mode_toggled.connect(self.multi_camera_widget.set_painting_mode)
+        self.control_panel.brush_size_changed.connect(self.multi_camera_widget.set_brush_size)
+        self.control_panel.mask_visibility_toggled.connect(self.multi_camera_widget.set_mask_visibility)
+
         # Update control panel to show camera selector
         self.control_panel.set_camera_count(self.camera_count)
 

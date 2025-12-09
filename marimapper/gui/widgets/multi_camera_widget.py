@@ -38,6 +38,7 @@ class MultiCameraWidget(QWidget):
         self.camera_labels = []  # List of QLabel overlays
         self.active_camera = 0
         self.fullscreen_camera = None  # None or camera_index
+        self._painting_mode_enabled = False  # Global painting mode state
 
         # Calculate grid dimensions
         if camera_count <= 4:
@@ -132,7 +133,15 @@ class MultiCameraWidget(QWidget):
         if camera_index < 0 or camera_index >= self.camera_count:
             return
 
+        old_camera = self.active_camera
         self.active_camera = camera_index
+
+        # Sync painting mode: disable on old camera, enable on new camera if globally enabled
+        if self._painting_mode_enabled:
+            if old_camera < len(self.detector_widgets):
+                self.detector_widgets[old_camera].set_painting_mode(False)
+            if camera_index < len(self.detector_widgets):
+                self.detector_widgets[camera_index].set_painting_mode(True)
 
         # Update visual indicators (highlight active camera)
         for i, widget in enumerate(self.detector_widgets):
@@ -212,13 +221,21 @@ class MultiCameraWidget(QWidget):
 
     def set_painting_mode(self, enabled: bool):
         """
-        Set painting mode for active camera only.
+        Set painting mode globally and apply to active camera.
 
         Args:
             enabled: True to enable painting mode, False to disable
         """
-        if self.active_camera < len(self.detector_widgets):
-            self.detector_widgets[self.active_camera].set_painting_mode(enabled)
+        self._painting_mode_enabled = enabled
+
+        if enabled:
+            # Only enable on the active camera
+            if self.active_camera < len(self.detector_widgets):
+                self.detector_widgets[self.active_camera].set_painting_mode(True)
+        else:
+            # Disable on all cameras when turning off globally
+            for widget in self.detector_widgets:
+                widget.set_painting_mode(False)
 
     def set_brush_size(self, size: int):
         """

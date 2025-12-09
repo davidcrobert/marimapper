@@ -59,7 +59,7 @@ A focused “Placement” mode for manually positioning tricky LEDs quickly and 
 7) Polish: orthographic quick-views, tooltips/shortcuts overlay, and performance tuning.
 
 ## Delivery Plan (project manager view)
-- **Sprint 1 (done): Mode scaffolding & layout**
+- **Sprint 1: Mode scaffolding & layout**
   - Add Placement Mode toggle/button and keyboard shortcut.
   - Build alternate layout (fullscreen 3D + slim side panel + bottom strip).
   - Wire entry/exit state transitions and restore prior layout.

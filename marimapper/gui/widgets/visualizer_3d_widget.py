@@ -55,6 +55,7 @@ class Visualizer3DWidget(QWidget):
     """Widget for displaying 3D LED reconstruction with interactive highlighting."""
 
     led_clicked = pyqtSignal(int)
+    key_pressed = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -68,6 +69,7 @@ class Visualizer3DWidget(QWidget):
         self.origin_marker: GLMeshItem | None = None
         self.axis_gizmo: GLLinePlotItem | None = None
         self.floor_marks: GLLinePlotItem | None = None
+        self.id_to_index: dict[int, int] = {}
         self.base_positions: np.ndarray | None = None
         self.working_positions: np.ndarray | None = None
         self.base_normals: np.ndarray | None = None
@@ -116,6 +118,9 @@ class Visualizer3DWidget(QWidget):
             "QLabel { color: #f2f2f2; background: rgba(0,0,0,150); padding: 6px 8px; "
             "border-radius: 6px; font-size: 11px; }"
         )
+        self.hint_label.setMaximumHeight(28)
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.hint_label.setWordWrap(False)
 
         layout.addWidget(self.hint_label)
         layout.addWidget(self.view)
@@ -148,6 +153,11 @@ class Visualizer3DWidget(QWidget):
                 if ev.text().lower() == "h":
                     self._reset_home_view()
                     return
+            except Exception:
+                pass
+            # Bubble key events so parent containers can react (e.g., placement nudges)
+            try:
+                self.key_pressed.emit(ev)
             except Exception:
                 pass
             return original_handler(ev)
@@ -391,6 +401,7 @@ class Visualizer3DWidget(QWidget):
         self.hover_index = None
         self.base_positions = np.array([led.point.position for led in leds_3d], dtype=float)
         self.base_normals = np.array([led.point.normal for led in leds_3d], dtype=float)
+        self.id_to_index = {led.led_id: i for i, led in enumerate(leds_3d)}
         # Working copies to support placement mode edits without losing originals
         self.working_positions = np.array(self.base_positions, copy=True)
         self.working_normals = np.array(self.base_normals, copy=True)
@@ -570,6 +581,22 @@ class Visualizer3DWidget(QWidget):
             return
         self.working_positions = np.array(self.base_positions, copy=True)
         self._refresh_view()
+
+    def nudge_working_leds(self, led_ids: set[int], delta: tuple[float, float, float]) -> bool:
+        """Nudge selected LEDs in working buffer by delta (world space)."""
+        if self.working_positions is None or not led_ids:
+            return False
+        moved = False
+        positions = np.array(self.working_positions, copy=True)
+        for led_id in led_ids:
+            idx = self.id_to_index.get(led_id)
+            if idx is None or idx >= len(positions):
+                continue
+            positions[idx] = positions[idx] + np.array(delta, dtype=float)
+            moved = True
+        if moved:
+            self.set_working_positions(positions)
+        return moved
 
     def export_transformed_leds(self):
         """Return transformed led data arrays (ids, positions, normals, errors) or None."""

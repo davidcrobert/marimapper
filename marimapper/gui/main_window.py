@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
         self.visualizer_3d_widget = Visualizer3DWidget()
         self.tab_widget.addTab(self.visualizer_3d_widget, "3D View")
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
+        self.visualizer_3d_widget.key_pressed.connect(self.on_visualizer_key)
 
         self.left_splitter.addWidget(self.tab_widget)
 
@@ -361,8 +362,9 @@ class MainWindow(QMainWindow):
         self.main_splitter.setSizes([max(self.width() - 250, 900), 250])
 
         self.visualizer_3d_widget.set_hint_text(
-            "Placement mode: click to select LEDs, drag to orbit, right-drag to pan, Esc to exit."
+            "Placement: click to select, drag to orbit, right-drag to pan, WASD/Arrows move, Q/E up/down, Esc exits."
         )
+        self.visualizer_3d_widget.view.setFocus()
         self.statusBar().showMessage("Placement mode active")
 
     def exit_placement_mode(self):
@@ -402,7 +404,17 @@ class MainWindow(QMainWindow):
             self.exit_placement_mode()
             event.accept()
             return
+        if self.placement_mode_active and self._handle_placement_nudge(event):
+            event.accept()
+            return
         super().keyPressEvent(event)
+
+    @pyqtSlot(object)
+    def on_visualizer_key(self, event):
+        """React to key presses that hit the 3D view (for placement nudges)."""
+        if self.placement_mode_active and self._handle_placement_nudge(event):
+            event.accept()
+            return
 
     def _update_placement_selection_display(self):
         """Refresh selection summary in placement panel."""
@@ -426,9 +438,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def on_placement_commit(self):
         """Placeholder commit hook; persists working positions in future sprint."""
+        self.save_transformed_cloud()
         self.placement_panel.set_dirty(False)
-        self.log_widget.log_info("Placement commit requested (stub).")
-        self.statusBar().showMessage("Placement commit requested (not yet wired)")
+        self.statusBar().showMessage("Placement committed")
 
     @pyqtSlot()
     def on_placement_discard(self):
@@ -440,6 +452,36 @@ class MainWindow(QMainWindow):
         self.placement_panel.set_dirty(False)
         self._update_placement_selection_display()
         self.statusBar().showMessage("Placement changes discarded (reset to original)")
+
+    def _handle_placement_nudge(self, event) -> bool:
+        """Keyboard nudges in placement mode (WASD/Arrows for X/Z, Q/E for Y)."""
+        if not self.placement_selection:
+            return False
+        key = event.key()
+        step = 0.02
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            step *= 5  # coarse move
+        dx = dy = dz = 0.0
+        if key in (Qt.Key.Key_W, Qt.Key.Key_Up):
+            dz += step
+        elif key in (Qt.Key.Key_S, Qt.Key.Key_Down):
+            dz -= step
+        elif key in (Qt.Key.Key_A, Qt.Key.Key_Left):
+            dx -= step
+        elif key in (Qt.Key.Key_D, Qt.Key.Key_Right):
+            dx += step
+        elif key == Qt.Key.Key_E:
+            dy += step
+        elif key == Qt.Key.Key_Q:
+            dy -= step
+        else:
+            return False
+
+        moved = self.visualizer_3d_widget.nudge_working_leds(self.placement_selection, (dx, dy, dz))
+        if moved:
+            self.placement_panel.set_dirty(True)
+            self._update_placement_selection_display()
+        return moved
 
     def start_scanner_init(self):
         """Start scanner initialization in background thread."""

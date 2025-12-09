@@ -172,6 +172,7 @@ class Scanner:
         # Placeholder attributes for compatibility
         self.coordinator = None
         self.detector_workers = None
+        self.worker_frame_queues = []
 
     def _init_multi_camera(self, axis_configs: List[dict]):
         """Initialize multi-camera mode with coordinator and workers."""
@@ -192,9 +193,17 @@ class Scanner:
 
         # Create detector workers
         self.detector_workers = []
+        self.worker_frame_queues = []  # Store frame queues for GUI mode
         for camera_id, axis_cfg in enumerate(axis_configs):
             # Each camera gets its own view_id (starting from current_view)
             view_id = self.current_view + camera_id
+
+            # Create per-camera frame queue if GUI is active
+            worker_frame_queue = None
+            if self.frame_queue is not None:  # GUI mode detected
+                from multiprocessing import Queue
+                worker_frame_queue = Queue(maxsize=3)
+                self.worker_frame_queues.append(worker_frame_queue)
 
             worker = DetectorWorkerProcess(
                 camera_id=camera_id,
@@ -207,6 +216,7 @@ class Scanner:
                 display=True,  # Show camera feed for each camera
                 axis_config=axis_cfg,
                 detection_timeout=detection_timeout,
+                frame_queue=worker_frame_queue,
             )
 
             # Connect worker outputs
@@ -302,6 +312,22 @@ class Scanner:
         except Exception as e:
             logger.error(f"Failed to get command queue for camera {camera_index}: {e}")
             return None
+
+    def get_worker_frame_queue(self, camera_index: int):
+        """
+        Get frame queue for specific camera worker in multi-camera mode.
+
+        Args:
+            camera_index: Index of the camera worker (0, 1, 2, ...)
+
+        Returns:
+            Queue for receiving frames from the specified worker, or None if not available
+        """
+        if not self.multi_camera_mode:
+            return None
+        if camera_index >= len(self.worker_frame_queues):
+            return None
+        return self.worker_frame_queues[camera_index]
 
     def close(self):
         logger.debug("scanner closing")

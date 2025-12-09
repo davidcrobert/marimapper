@@ -45,6 +45,7 @@ class DetectorWorkerProcess(Process):
         display: bool = False,
         axis_config: Optional[dict] = None,
         detection_timeout: float = 1.5,
+        frame_queue: Optional[Queue] = None,
     ):
         """
         Initialize detector worker.
@@ -60,6 +61,7 @@ class DetectorWorkerProcess(Process):
             display: Whether to display camera feed (usually False for multi-cam)
             axis_config: Configuration for AXIS IP camera
             detection_timeout: Max seconds to wait for a detection before skipping
+            frame_queue: Optional queue for sending frames to GUI (instead of cv2.imshow)
         """
         super().__init__()
         self.camera_id = camera_id
@@ -72,6 +74,7 @@ class DetectorWorkerProcess(Process):
         self.display = display
         self.axis_config = axis_config
         self.detection_timeout = detection_timeout
+        self._frame_queue = frame_queue
         self._window_name = f"MariMapper - Camera {self.camera_id}"
         self._preview_error_logged = False
         self._window_initialized = False
@@ -107,9 +110,18 @@ class DetectorWorkerProcess(Process):
 
         if self.display:
             rendered_image = draw_led_detections(image, results)
-            window_name = f"MariMapper - Camera {self.camera_id}"
-            cv2.imshow(window_name, rendered_image)
-            cv2.waitKey(1)
+
+            # Send to GUI frame queue if provided
+            if self._frame_queue is not None:
+                try:
+                    self._frame_queue.put_nowait(rendered_image)
+                except queue.Full:
+                    pass  # Skip frame if queue full
+            else:
+                # Fallback to cv2.imshow for CLI
+                window_name = f"MariMapper - Camera {self.camera_id}"
+                cv2.imshow(window_name, rendered_image)
+                cv2.waitKey(1)
 
         return results
 
@@ -152,17 +164,24 @@ class DetectorWorkerProcess(Process):
         Show a live preview frame when idle so the window is visible before scans.
         This only runs when display=True.
         """
-        if not self._window_initialized:
-            # Allow manual resize of the OpenCV window
-            cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-            self._window_initialized = True
-
         try:
             frame = cam.read()
             if frame is None:
                 return
-            cv2.imshow(self._window_name, frame)
-            cv2.waitKey(1)
+
+            if self._frame_queue is not None:
+                # Send to GUI frame queue
+                try:
+                    self._frame_queue.put_nowait(frame)
+                except queue.Full:
+                    pass  # Skip frame if queue full
+            else:
+                # Fallback to cv2.imshow for CLI
+                if not self._window_initialized:
+                    cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                    self._window_initialized = True
+                cv2.imshow(self._window_name, frame)
+                cv2.waitKey(1)
         except Exception as e:
             if not self._preview_error_logged:
                 logger.warning(f"Camera {self.camera_id}: Live preview error: {e}")

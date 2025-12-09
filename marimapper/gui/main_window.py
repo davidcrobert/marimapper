@@ -28,6 +28,7 @@ from marimapper.detector_process import CameraCommand
 from marimapper.gui.signals import MariMapperSignals
 from marimapper.file_tools import load_3d_leds_from_file
 from marimapper.gui.widgets.detector_widget import DetectorWidget
+from marimapper.gui.widgets.multi_camera_widget import MultiCameraWidget
 from marimapper.gui.widgets.control_panel import ControlPanel
 from marimapper.gui.widgets.log_widget import LogWidget
 from marimapper.gui.widgets.status_table import StatusTable
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
         self.mask_resolutions = {}  # {camera_index: (height, width)}
         self.active_camera_index = 0  # Currently displayed camera for mask editing
         self.camera_count = 1  # Number of cameras (1 for single, N for multi)
+        self.multi_camera_widget = None  # Created later if multi-camera mode
 
         # Project management
         self.project_manager = ProjectManager()
@@ -786,6 +788,9 @@ class MainWindow(QMainWindow):
                 scanner.get_worker_frame_queue(i)
                 for i in range(self.camera_count)
             ]
+
+            # Replace single-camera UI with multi-camera grid
+            self._setup_multi_camera_ui()
         else:
             # Single camera mode
             self.camera_count = 1
@@ -812,10 +817,6 @@ class MainWindow(QMainWindow):
         self.control_panel.start_button.setEnabled(True)
         self.statusBar().showMessage("Scanner ready")
 
-        # Initialize camera selector if multi-camera
-        if self.camera_count > 1:
-            self.control_panel.set_camera_count(self.camera_count)
-
         # Auto-load saved masks
         self.auto_load_masks()
 
@@ -838,6 +839,28 @@ class MainWindow(QMainWindow):
             f"Failed to initialize scanner:\n{error_msg}\n\nPlease check camera and backend connections.",
         )
 
+    def _setup_multi_camera_ui(self):
+        """Replace single camera widget with multi-camera grid."""
+        # Remove old "Video Feed" tab (index 0)
+        self.tab_widget.removeTab(0)
+
+        # Create multi-camera widget
+        self.multi_camera_widget = MultiCameraWidget(self.camera_count)
+        self.tab_widget.insertTab(0, self.multi_camera_widget, "Camera Grid")
+
+        # Connect signals
+        self.multi_camera_widget.camera_selected.connect(self.on_camera_selected)
+        self.multi_camera_widget.mask_updated.connect(self.on_mask_updated_multi)
+
+        # Update control panel to show camera selector
+        self.control_panel.set_camera_count(self.camera_count)
+
+        # Disable single-camera detector widget
+        self.detector_widget.hide()
+        self.detector_widget = None
+
+        self.log_widget.log_info(f"Multi-camera UI initialized with {self.camera_count} cameras")
+
     @pyqtSlot(int, object)
     def on_frame_ready_multi(self, camera_index: int, frame):
         """
@@ -847,10 +870,13 @@ class MainWindow(QMainWindow):
             camera_index: Index of camera that produced this frame
             frame: Video frame (numpy array)
         """
-        # TODO: Once MultiCameraWidget is implemented, route to correct camera widget
-        # For now, just show camera 0's frames on the main detector widget
-        if camera_index == 0:
-            self.detector_widget.update_frame(frame)
+        # Route frame to multi-camera grid widget
+        if self.multi_camera_widget is not None:
+            self.multi_camera_widget.update_frame(camera_index, frame)
+        elif camera_index == 0:
+            # Fallback: show camera 0 on main detector widget if grid not yet created
+            if self.detector_widget is not None:
+                self.detector_widget.update_frame(frame)
 
     @pyqtSlot(int, int)
     def start_scan(self, led_from: int, led_to: int):
@@ -1145,7 +1171,7 @@ class MainWindow(QMainWindow):
         self.current_masks[self.active_camera_index] = mask_numpy
 
         # Get current video resolution from detector widget
-        if self.detector_widget.video_label.pixmap():
+        if self.detector_widget and self.detector_widget.video_label.pixmap():
             pixmap = self.detector_widget.video_label.pixmap()
             self.mask_resolutions[self.active_camera_index] = (
                 pixmap.height(),
@@ -1159,13 +1185,42 @@ class MainWindow(QMainWindow):
             f"Mask updated for camera {self.active_camera_index}"
         )
 
+    @pyqtSlot(int, object)
+    def on_mask_updated_multi(self, camera_index: int, mask_numpy):
+        """Handle mask update from multi-camera grid."""
+        if mask_numpy is None:
+            return
+
+        # Store mask
+        self.current_masks[camera_index] = mask_numpy
+
+        # Get resolution from the specific camera widget in grid
+        if self.multi_camera_widget:
+            widget = self.multi_camera_widget.detector_widgets[camera_index]
+            if widget.video_label.pixmap():
+                pixmap = widget.video_label.pixmap()
+                self.mask_resolutions[camera_index] = (
+                    pixmap.height(),
+                    pixmap.width(),
+                )
+
+        # Send to detector worker
+        self.send_mask_to_detector(camera_index)
+
+        self.log_widget.log_info(f"Mask updated for camera {camera_index}")
+
     @pyqtSlot()
     def on_clear_mask(self):
         """Clear the current mask."""
         # Clear mask for active camera
         self.current_masks.pop(self.active_camera_index, None)
         self.mask_resolutions.pop(self.active_camera_index, None)
-        self.detector_widget.set_mask_from_numpy(None)
+
+        # Clear in appropriate widget
+        if self.multi_camera_widget:
+            self.multi_camera_widget.clear_mask(self.active_camera_index)
+        elif self.detector_widget:
+            self.detector_widget.set_mask_from_numpy(None)
 
         # Send clear command to detector
         self.send_mask_to_detector(self.active_camera_index)
@@ -1270,19 +1325,24 @@ class MainWindow(QMainWindow):
         """Switch active camera for mask editing."""
         self.active_camera_index = camera_index
 
-        # Load that camera's mask into DetectorWidget
-        if camera_index in self.current_masks:
-            self.detector_widget.set_mask_from_numpy(
-                self.current_masks[camera_index]
-            )
-            self.log_widget.log_info(
-                f"Loaded mask for camera {camera_index}"
-            )
-        else:
-            self.detector_widget.set_mask_from_numpy(None)
-            self.log_widget.log_info(
-                f"No mask for camera {camera_index}"
-            )
+        # Update multi-camera widget if in multi-camera mode
+        if self.multi_camera_widget:
+            self.multi_camera_widget.set_active_camera(camera_index)
+            self.log_widget.log_info(f"Camera {camera_index} selected")
+        elif self.detector_widget:
+            # Single-camera mode: Load that camera's mask into DetectorWidget
+            if camera_index in self.current_masks:
+                self.detector_widget.set_mask_from_numpy(
+                    self.current_masks[camera_index]
+                )
+                self.log_widget.log_info(
+                    f"Loaded mask for camera {camera_index}"
+                )
+            else:
+                self.detector_widget.set_mask_from_numpy(None)
+                self.log_widget.log_info(
+                    f"No mask for camera {camera_index}"
+                )
 
     def send_mask_to_detector(self, camera_index: int):
         """Send mask to detector process via CameraCommand."""

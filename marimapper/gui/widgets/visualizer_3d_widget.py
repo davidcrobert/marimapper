@@ -66,6 +66,8 @@ class Visualizer3DWidget(QWidget):
         self.floor_grid: GLGridItem | None = None
         self.floor_labels: list = []
         self.origin_marker: GLMeshItem | None = None
+        self.axis_gizmo: GLLinePlotItem | None = None
+        self.floor_marks: GLLinePlotItem | None = None
         self.base_positions: np.ndarray | None = None
         self.base_normals: np.ndarray | None = None
         self.current_transform = {
@@ -97,7 +99,14 @@ class Visualizer3DWidget(QWidget):
         self.view.setBackgroundColor((50, 50, 50))
         self.view.opts['distance'] = 20
         self.view.orbit(45, 20)
+        self.view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.view.setMouseTracking(True)
+        self._home_view = {
+            "azimuth": self.view.opts.get("azimuth", 45),
+            "elevation": self.view.opts.get("elevation", 20),
+            "distance": self.view.opts.get("distance", 20),
+            "center": self.view.opts.get("center"),
+        }
 
         layout.addWidget(self.view)
         self.setLayout(layout)
@@ -105,9 +114,11 @@ class Visualizer3DWidget(QWidget):
         # Route mouse events for hover/pick handling
         self.view.mouseMoveEvent = self._wrapped_mouse_move(self.view.mouseMoveEvent)
         self.view.mousePressEvent = self._wrapped_mouse_press(self.view.mousePressEvent)
+        self.view.keyPressEvent = self._wrapped_key_press(self.view.keyPressEvent)
 
         self._add_floor()
         self._add_origin_marker()
+        self._add_axis_gizmo()
 
     def _wrapped_mouse_move(self, original_handler):
         def handler(ev):
@@ -120,6 +131,31 @@ class Visualizer3DWidget(QWidget):
             self._handle_click(ev)
             return original_handler(ev)
         return handler
+
+    def _wrapped_key_press(self, original_handler):
+        def handler(ev):
+            try:
+                if ev.text().lower() == "h":
+                    self._reset_home_view()
+                    return
+            except Exception:
+                pass
+            return original_handler(ev)
+        return handler
+
+    def _reset_home_view(self):
+        """Return camera to the startup 'home' view."""
+        if not PG_AVAILABLE or not hasattr(self, "view"):
+            return
+        center = self._home_view.get("center", None)
+        if center is not None:
+            self.view.opts["center"] = center
+        self.view.setCameraPosition(
+            distance=self._home_view.get("distance", 20),
+            azimuth=self._home_view.get("azimuth", 45),
+            elevation=self._home_view.get("elevation", 20),
+        )
+        self.view.update()
 
     def _base_positions_array(self):
         if self.base_positions is not None:
@@ -148,6 +184,7 @@ class Visualizer3DWidget(QWidget):
         if pts.ndim == 1:
             pts = pts.reshape(1, 3)
         view_pts = pts[..., [0, 2, 1]]
+        view_pts[..., 1] *= -1.0  # flip depth so +Z in world goes away from camera
         return view_pts.reshape(points.shape)
 
     def _colors_array(self, highlight=None):
@@ -267,6 +304,19 @@ class Visualizer3DWidget(QWidget):
             self.view.addItem(item)
             self.floor_labels.append(item)
 
+        # Add subtle floor direction marks (short ticks toward N/E/S/W)
+        mark_len = 1.5
+        marks_world = []
+        directions = [(0, 8, 0, mark_len), (0, -8, 0, -mark_len), (8, 0, mark_len, 0), (-8, 0, -mark_len, 0)]
+        for dx, dz, ox, oz in directions:
+            start = np.array([dx, 0.0, dz], dtype=float)
+            end = np.array([dx + ox, 0.0, dz + oz], dtype=float)
+            marks_world.extend([start, end])
+        marks_view = self._to_view_space(np.array(marks_world, dtype=float))
+        colors = np.array([[0.7, 0.7, 0.7, 0.6]] * len(marks_world), dtype=float)
+        self.floor_marks = GLLinePlotItem(pos=marks_view, color=colors, width=2, antialias=True, mode='lines')
+        self.view.addItem(self.floor_marks)
+
     def _add_origin_marker(self):
         """Add a small sphere at the origin to mark (0,0,0)."""
         if not PG_AVAILABLE or GLMeshItem is None or MeshData is None:
@@ -281,6 +331,36 @@ class Visualizer3DWidget(QWidget):
         sphere.setGLOptions("opaque")
         self.view.addItem(sphere)
         self.origin_marker = sphere
+
+    def _add_axis_gizmo(self):
+        """Add small RGB axis lines at the origin to show orientation."""
+        if not PG_AVAILABLE:
+            return
+        axis_len = 1.5
+        axes_world = np.array(
+            [
+                [0, 0, 0], [axis_len, 0, 0],  # +X red
+                [0, 0, 0], [0, axis_len, 0],  # +Y green (up)
+                [0, 0, 0], [0, 0, axis_len],  # +Z blue (depth forward)
+            ],
+            dtype=float,
+        )
+        axes_view = self._to_view_space(axes_world)
+        colors = np.array(
+            [
+                [1.0, 0.1, 0.1, 1.0],
+                [1.0, 0.1, 0.1, 1.0],
+                [0.2, 1.0, 0.2, 1.0],
+                [0.2, 1.0, 0.2, 1.0],
+                [0.2, 0.4, 1.0, 1.0],
+                [0.2, 0.4, 1.0, 1.0],
+            ],
+            dtype=float,
+        )
+        gizmo = GLLinePlotItem(pos=axes_view, color=colors, width=3, antialias=True, mode='lines')
+        gizmo.translate(0, 0, 0)
+        self.view.addItem(gizmo)
+        self.axis_gizmo = gizmo
 
     @pyqtSlot(list)
     def update_3d_data(self, leds_3d):

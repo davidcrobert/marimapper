@@ -129,6 +129,9 @@ class PlacementPanel(QWidget):
             self.status_label.setText("Focused placement workflow is active.")
             self.status_label.setStyleSheet("")
 
+    def is_dirty(self) -> bool:
+        return bool(self._dirty)
+
     def set_problem_ids(self, ids: list[int]):
         """Populate the problem LEDs list."""
         self.problem_ids = ids or []

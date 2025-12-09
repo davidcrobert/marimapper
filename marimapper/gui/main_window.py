@@ -312,6 +312,7 @@ class MainWindow(QMainWindow):
         self.signals.reconstruction_updated.connect(self.on_reconstruction_updated)
         self.signals.points_3d_updated.connect(self.on_points_3d_updated)
         self.visualizer_3d_widget.led_clicked.connect(self.on_visualizer_led_clicked)
+        self.visualizer_3d_widget.working_positions_changed.connect(self._on_working_positions_changed)
 
         # Transform controls
         self.transform_controls.transform_changed.connect(self.visualizer_3d_widget.set_transform)
@@ -325,12 +326,18 @@ class MainWindow(QMainWindow):
         self.transform_controls.setVisible(is_3d and not self.placement_mode_active)
         self.placement_toggle_btn.setVisible(is_3d)
         if not is_3d and self.placement_mode_active:
-            self.exit_placement_mode()
+            if not self.exit_placement_mode(allow_prompt=True):
+                # Revert tab back to 3D if user cancels exit
+                idx = self.tab_widget.indexOf(self.visualizer_3d_widget)
+                if idx >= 0:
+                    self.tab_widget.blockSignals(True)
+                    self.tab_widget.setCurrentIndex(idx)
+                    self.tab_widget.blockSignals(False)
 
     @pyqtSlot()
     def toggle_placement_mode(self):
         if self.placement_mode_active:
-            self.exit_placement_mode()
+            self.exit_placement_mode(allow_prompt=True)
         else:
             self.enter_placement_mode()
 
@@ -376,10 +383,20 @@ class MainWindow(QMainWindow):
         self.visualizer_3d_widget.view.setFocus()
         self.statusBar().showMessage("Placement mode active")
 
-    def exit_placement_mode(self):
+    def exit_placement_mode(self, allow_prompt: bool = True):
         """Restore standard layout and interactions."""
         if not self.placement_mode_active:
-            return
+            return True
+        if allow_prompt and self.placement_panel.is_dirty():
+            resp = QMessageBox.question(
+                self,
+                "Discard placement changes?",
+                "You have unsaved placement edits. Exit and discard them?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return False
         self.placement_mode_active = False
 
         self.log_widget.setVisible(self._pre_placement_layout.get("log_visible", True) if self._pre_placement_layout else True)
@@ -406,12 +423,17 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.visualizer_3d_widget.set_hint_text(None)
+        # If we exited while dirty (with user confirmation), discard placement edits
+        if allow_prompt and self.placement_panel.is_dirty():
+            self.on_placement_discard()
+        self._clear_placement_selection()
         self.statusBar().showMessage("Placement mode exited")
+        return True
 
     def keyPressEvent(self, event):
         """Handle global shortcuts (e.g., Esc to exit placement)."""
         if event.key() == Qt.Key.Key_Escape and self.placement_mode_active:
-            self.exit_placement_mode()
+            self._clear_placement_selection()
             event.accept()
             return
         if self.placement_mode_active and event.key() == Qt.Key.Key_Tab:
@@ -432,6 +454,10 @@ class MainWindow(QMainWindow):
             if self._select_next_problem(forward):
                 event.accept()
                 return
+        if self.placement_mode_active and event.key() == Qt.Key.Key_Escape:
+            self._clear_placement_selection()
+            event.accept()
+            return
         if self.placement_mode_active and self._handle_placement_nudge(event):
             event.accept()
             return
@@ -582,6 +608,13 @@ class MainWindow(QMainWindow):
         self.visualizer_3d_widget.set_selection_ids(self.placement_selection)
         self._update_placement_selection_display()
 
+    def _clear_placement_selection(self):
+        """Deselect current placement selection and hide gizmo anchor."""
+        self.placement_selection = set()
+        self.visualizer_3d_widget.set_active_leds(set())
+        self.visualizer_3d_widget.set_selection_ids(set())
+        self._update_placement_selection_display()
+
     def _ensure_problem_placeholder(self, led_id: int):
         """If a problem LED lacks a 3D point, seed it near neighbors so it can be placed."""
         if led_id in self.visualizer_3d_widget.id_to_index:
@@ -670,6 +703,12 @@ class MainWindow(QMainWindow):
         self.visualizer_3d_widget.set_working_positions(positions)
         self.placement_panel.set_dirty(True)
         self.log_widget.log_success(f"Interpolated {len(changes)} problem LEDs between known anchors.")
+
+    @pyqtSlot()
+    def _on_working_positions_changed(self):
+        """Mark placement dirty when working positions change in placement mode."""
+        if self.placement_mode_active:
+            self.placement_panel.set_dirty(True)
 
     def _prune_solved_problems(self):
         """Remove any problem IDs that now have positions (e.g., after commit)."""

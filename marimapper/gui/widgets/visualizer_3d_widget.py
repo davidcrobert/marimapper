@@ -57,6 +57,7 @@ class Visualizer3DWidget(QWidget):
 
     led_clicked = pyqtSignal(int)
     key_pressed = pyqtSignal(object)
+    working_positions_changed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -180,12 +181,10 @@ class Visualizer3DWidget(QWidget):
 
     def _wrapped_key_press(self, original_handler):
         def handler(ev):
-            try:
-                if ev.text().lower() == "h":
-                    self._reset_home_view()
-                    return
-            except Exception:
-                pass
+            if ev.key() == Qt.Key.Key_H:
+                self._reset_home_view()
+                ev.accept()
+                return
             # Bubble key events so parent containers can react (e.g., placement nudges)
             try:
                 self.key_pressed.emit(ev)
@@ -587,6 +586,10 @@ class Visualizer3DWidget(QWidget):
             self.working_positions = np.array(positions, dtype=float, copy=True)
         self._refresh_view()
         self._update_gizmo_geometry()
+        try:
+            self.working_positions_changed.emit()
+        except Exception:
+            pass
 
     def reset_working_positions(self):
         """Restore working positions from base/original positions."""

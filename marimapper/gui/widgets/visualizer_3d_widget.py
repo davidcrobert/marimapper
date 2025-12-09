@@ -40,6 +40,17 @@ except Exception as e:
     GLTextItem = None
 
 
+if PG_AVAILABLE:
+    class UnclampedGLViewWidget(GLViewWidget):
+        """Drop the default elevation clamp so we can orbit past +/-90°."""
+
+        def orbit(self, azim, elev):
+            # Allow full rotation without the usual [-90, 90] elevation clamp.
+            self.opts["azimuth"] = (self.opts.get("azimuth", 0) + azim) % 360
+            self.opts["elevation"] = (self.opts.get("elevation", 0) + elev) % 360
+            self.update()
+
+
 class Visualizer3DWidget(QWidget):
     """Widget for displaying 3D LED reconstruction with interactive highlighting."""
 
@@ -82,7 +93,7 @@ class Visualizer3DWidget(QWidget):
         # Configure global pyqtgraph aesthetics
         pg.setConfigOptions(antialias=True)
 
-        self.view = GLViewWidget()
+        self.view = UnclampedGLViewWidget()
         self.view.setBackgroundColor((50, 50, 50))
         self.view.opts['distance'] = 20
         self.view.orbit(45, 20)

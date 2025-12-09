@@ -608,6 +608,16 @@ class Visualizer3DWidget(QWidget):
         errors = np.array([getattr(led.point, "error", 0.0) for led in self.leds_3d], dtype=float)
         return ids, positions, normals, errors
 
+    def export_working_leds(self):
+        """Return working (un-transformed) led data arrays."""
+        if not self.leds_3d or self.working_positions is None:
+            return None
+        ids = [led.led_id for led in self.leds_3d]
+        positions = np.array(self.working_positions, copy=True)
+        normals = np.array(self.working_normals if self.working_normals is not None else self.base_normals, copy=True)
+        errors = np.array([getattr(led.point, "error", 0.0) for led in self.leds_3d], dtype=float)
+        return ids, positions, normals, errors
+
     def set_hint_text(self, text: str | None):
         """Show or hide the hint banner above the view."""
         if text:

@@ -359,17 +359,19 @@ class ProjectManager:
         if not self.active_project:
             return None
 
-        reconstruction_path = (
-            self.active_project.get_reconstruction_dir() / "led_map_3d.csv"
-        )
+        recon_dir = self.active_project.get_reconstruction_dir()
+        base_path = recon_dir / "led_map_3d.csv"
+        transformed_path = recon_dir / "transformed_led_map_3d.csv"
 
-        if not reconstruction_path.exists():
+        # Always prefer the base map; fall back to transformed only if base is missing
+        load_path = base_path if base_path.exists() else transformed_path
+        if not load_path.exists():
             logger.debug("No 3D reconstruction found in project")
             return None
 
-        leds = load_3d_leds_from_file(reconstruction_path)
+        leds = load_3d_leds_from_file(load_path)
         if leds:
-            logger.info(f"Loaded {len(leds)} 3D points from project")
+            logger.info(f"Loaded {len(leds)} 3D points from project ({load_path.name})")
         return leds
 
 

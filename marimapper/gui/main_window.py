@@ -467,9 +467,9 @@ class MainWindow(QMainWindow):
         elif key in (Qt.Key.Key_S, Qt.Key.Key_Down):
             dz -= step
         elif key in (Qt.Key.Key_A, Qt.Key.Key_Left):
-            dx -= step
-        elif key in (Qt.Key.Key_D, Qt.Key.Key_Right):
             dx += step
+        elif key in (Qt.Key.Key_D, Qt.Key.Key_Right):
+            dx -= step
         elif key == Qt.Key.Key_E:
             dy += step
         elif key == Qt.Key.Key_Q:
@@ -795,6 +795,7 @@ class MainWindow(QMainWindow):
     def save_transformed_cloud(self):
         """Save the currently displayed (transformed) 3D points to CSV."""
         export = self.visualizer_3d_widget.export_transformed_leds()
+        working_export = self.visualizer_3d_widget.export_working_leds()
         if not export:
             self.log_widget.log_warning("No 3D data available to save.")
             return
@@ -818,6 +819,23 @@ class MainWindow(QMainWindow):
                         [led_idx, pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2], err]
                     )
             self.log_widget.log_success(f"Saved transformed map to {path}")
+
+            # Write base map in un-transformed working space so it stays consistent for reloads
+            if working_export:
+                base_ids, base_positions, base_normals, base_errors = working_export
+                if self.project_manager.is_project_active():
+                    base_path = reconstruction_dir / "led_map_3d.csv"
+                else:
+                    base_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
+                with open(base_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["index", "x", "y", "z", "xn", "yn", "zn", "error"])
+                    for idx, (pos, nrm, err) in enumerate(zip(base_positions, base_normals, base_errors)):
+                        led_idx = base_ids[idx] if base_ids else idx
+                        writer.writerow(
+                            [led_idx, pos[0], pos[1], pos[2], nrm[0], nrm[1], nrm[2], err]
+                        )
+                self.log_widget.log_success(f"Updated base map at {base_path}")
 
             # Save transform to project if active
             if self.project_manager.is_project_active():
@@ -1056,19 +1074,28 @@ class MainWindow(QMainWindow):
         if self.project_manager.is_project_active():
             reconstruction_dir = self.project_manager.get_reconstruction_dir()
             led_map_3d_path = reconstruction_dir / "led_map_3d.csv"
+            transformed_path = reconstruction_dir / "transformed_led_map_3d.csv"
         else:
             led_map_3d_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
+            transformed_path = Path(self.scanner_args.output_dir) / "transformed_led_map_3d.csv"
 
-        if not led_map_3d_path.exists():
+        load_path = None
+        # Prefer base map; fall back to transformed only if base missing
+        if led_map_3d_path.exists():
+            load_path = led_map_3d_path
+        elif transformed_path.exists():
+            load_path = transformed_path
+
+        if load_path is None:
             self.log_widget.log_info("No existing 3D data found")
             return
 
         try:
-            self.log_widget.log_info("Loading existing 3D data...")
-            leds_3d = load_3d_leds_from_file(led_map_3d_path)
+            self.log_widget.log_info(f"Loading existing 3D data from {load_path.name}...")
+            leds_3d = load_3d_leds_from_file(load_path)
 
             if leds_3d is not None and len(leds_3d) > 0:
-                self.log_widget.log_success(f"Loaded {len(leds_3d)} LEDs from existing 3D map")
+                self.log_widget.log_success(f"Loaded {len(leds_3d)} LEDs from existing 3D map ({load_path.name})")
                 # Display in 3D widget
                 self.visualizer_3d_widget.update_3d_data(leds_3d)
                 # Optionally switch to 3D View tab to show the loaded data

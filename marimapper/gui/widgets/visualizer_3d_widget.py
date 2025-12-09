@@ -126,7 +126,18 @@ class Visualizer3DWidget(QWidget):
 
     def _positions_array(self):
         """Current (transformed) positions for display/picking."""
-        return self._transformed_positions()
+        return self._to_view_space(self._transformed_positions())
+
+    def _to_view_space(self, points: np.ndarray) -> np.ndarray:
+        """Map world coords (x, y-up, z-depth) into GL's z-up view space."""
+        if points is None or points.size == 0:
+            return np.zeros((0, 3), dtype=float)
+        pts = np.asarray(points, dtype=float)
+        # Support both single-point and Nx3 arrays
+        if pts.ndim == 1:
+            pts = pts.reshape(1, 3)
+        view_pts = pts[..., [0, 2, 1]]
+        return view_pts.reshape(points.shape)
 
     def _colors_array(self, highlight=None):
         colors = []
@@ -199,7 +210,7 @@ class Visualizer3DWidget(QWidget):
         if not PG_AVAILABLE or self.leds_3d is None or len(self.leds_3d) == 0:
             return
 
-        pos = self._transformed_positions()
+        pos = self._positions_array()
         colors = self._colors_array(highlight=self.hover_index)
         point_size = self._point_size_from_scale()
 
@@ -217,12 +228,11 @@ class Visualizer3DWidget(QWidget):
         if not PG_AVAILABLE or GLGridItem is None:
             return
 
-        # Grid in the X/Z plane with Y as up
+        # Grid in the X/Z plane with Y as up (mapped into GL z-up view space)
         grid = GLGridItem()
         grid.setSize(x=20, y=20)
         grid.setSpacing(x=1, y=1)
         grid.translate(0, 0, 0)
-        grid.rotate(90, 1, 0, 0)
         grid.setDepthValue(10)  # draw behind points
         self.view.addItem(grid)
         self.floor_grid = grid
@@ -230,12 +240,15 @@ class Visualizer3DWidget(QWidget):
         if GLTextItem is None:
             return  # text labels unavailable on this pyqtgraph version
 
-        labels = [
+        labels = []
+        for text, world_pos in [
             ("N", (0, 0, 10)),
             ("S", (0, 0, -10)),
             ("E", (10, 0, 0)),
             ("W", (-10, 0, 0)),
-        ]
+        ]:
+            gl_pos = tuple(self._to_view_space(np.array(world_pos, dtype=float)))
+            labels.append((text, gl_pos))
         font = QFont()
         font.setPointSize(14)
         for text, pos in labels:
@@ -276,7 +289,7 @@ class Visualizer3DWidget(QWidget):
 
         segments = []
         colors = []
-        pos = positions if positions is not None else self._transformed_positions()
+        pos = positions if positions is not None else self._positions_array()
         for i in range(len(self.leds_3d) - 1):
             cur = self.leds_3d[i]
             nxt = self.leds_3d[i + 1]

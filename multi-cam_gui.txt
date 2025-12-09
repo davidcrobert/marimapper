@@ -1,0 +1,887 @@
+ Overview
+
+ Add multi-camera support to the MariMapper GUI with dynamic grid layouts (2x2 for 2-4 cameras, 3x3 for 5-9 cameras).
+ Each camera view should support independent mask painting, fullscreen toggle, and all existing single-camera features.
+
+ User Requirements (Confirmed)
+
+ - Grid Layout: 1 camera = single view, 2-4 = 2x2 grid, 5-9 = 3x3 grid
+ - Per-Camera Features: Each view must support mask painting, fullscreen, all controls
+ - Camera Labels: Display camera number (e.g., "Camera 1", "Camera 2") on each view
+ - Fullscreen Behavior: Hide grid entirely, show only maximized camera, toggle to restore grid
+ - Auto-Switch: Clicking a camera view automatically selects it in control panel for mask editing
+ - Backwards Compatibility: Single-camera mode must work unchanged
+
+ Current State Analysis
+
+ Multi-Camera CLI (Already Works)
+
+ - CoordinatorProcess controls LED backend
+ - N DetectorWorkerProcess instances (one per camera)
+ - Mode detected by: len(axis_configs) > 1
+ - Each worker has unique camera_id and view_id
+
+ GUI Scaffolding (Partial Support)
+
+ - MainWindow detects multi-camera: if hasattr(scanner, "detector_workers")
+ - Per-camera masks: current_masks[camera_index] already implemented
+ - Camera selector dropdown in ControlPanel exists
+ - Mask sending works for both single/multi-camera modes
+
+ Missing Components
+
+ 1. GUI CLI: No parsing for --axis-hosts or --axis-cameras-json
+ 2. ScannerArgs: Missing axis_configs field (only has single axis_config)
+ 3. Frame Delivery: DetectorWorkerProcess has no frame_queue support (uses cv2.imshow only)
+ 4. GUI Layout: Only one DetectorWidget displayed (no grid)
+ 5. Frame Routing: No per-camera frame queues to route to multiple widgets
+
+ Architecture Design
+
+ Frame Delivery Path (Multi-Camera)
+
+ DetectorWorkerProcess[0] → worker_frame_queue[0] ┐
+ DetectorWorkerProcess[1] → worker_frame_queue[1] ├→ StatusMonitorThread → signals.frame_ready_multi(camera_id, frame)
+ DetectorWorkerProcess[2] → worker_frame_queue[2] ┘                           ↓
+                                                                    MultiCameraWidget.update_frame(camera_id, frame)
+                                                                               ↓
+                                                                    DetectorWidget[camera_id].update_frame(frame)
+
+ Widget Hierarchy (Multi-Camera Mode)
+
+ MainWindow
+ └── QTabWidget
+     └── Tab 0: "Camera Grid"
+         └── MultiCameraWidget (NEW)
+             └── QGridLayout (2x2 or 3x3)
+                 ├── DetectorWidget[0] ("Camera 1")
+                 ├── DetectorWidget[1] ("Camera 2")
+                 ├── DetectorWidget[2] ("Camera 3")
+                 └── ...
+
+ Fullscreen Mechanism
+
+ - Normal: All DetectorWidgets visible in grid layout
+ - Fullscreen: Hide all except one, expand selected to full grid (0,0,3,3 span)
+ - Toggle: Same camera index toggles back to grid
+
+ Implementation Plan
+
+ Phase 1: Frame Delivery Infrastructure
+
+ 1.1 Add frame_queue support to DetectorWorkerProcess
+
+ File: marimapper/detector_worker_process.py
+
+ Changes:
+ - Add frame_queue parameter to __init__ (optional, default None)
+ - Modify _find_led_with_display() to send frames to queue when provided
+ - Modify _show_live_preview() to send frames to queue during idle
+ - Fallback to cv2.imshow when frame_queue is None
+
+ Code additions:
+ # Line 48 - Add frame_queue parameter
+ def __init__(
+     self,
+     camera_id: int,
+     view_id: int,
+     device: Optional[str],
+     dark_exposure: int,
+     threshold: int,
+     command_queue: Queue,
+     result_queue: Queue,
+     display: bool = False,
+     axis_config: Optional[dict] = None,
+     detection_timeout: float = 1.5,
+     frame_queue: Optional[Queue] = None,  # NEW
+ ):
+     # ... existing params ...
+     self._frame_queue = frame_queue
+
+ # Line 108 - Modify _find_led_with_display
+ def _find_led_with_display(self, cam: Camera) -> Optional[Point2D]:
+     # ... existing detection code ...
+
+     if self.display:
+         rendered_image = draw_led_detections(image, results)
+
+         # Send to GUI frame queue if provided
+         if self._frame_queue is not None:
+             try:
+                 self._frame_queue.put_nowait(rendered_image)
+             except queue.Full:
+                 pass  # Skip frame if queue full
+         else:
+             # Fallback to cv2.imshow for CLI
+             cv2.imshow(f"MariMapper - Camera {self.camera_id}", rendered_image)
+             cv2.waitKey(1)
+
+     return results
+
+ # Line 150 - Modify _show_live_preview
+ def _show_live_preview(self, cam: Camera):
+     try:
+         frame = cam.read()
+         if frame is None:
+             return
+
+         if self._frame_queue is not None:
+             try:
+                 self._frame_queue.put_nowait(frame)
+             except queue.Full:
+                 pass
+         else:
+             if not self._window_initialized:
+                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                 self._window_initialized = True
+             cv2.imshow(self._window_name, frame)
+             cv2.waitKey(1)
+     except Exception as e:
+         logger.warning(f"Camera {self.camera_id}: Error showing preview - {e}")
+
+ 1.2 Modify Scanner to create per-camera frame queues
+
+ File: marimapper/scanner.py
+
+ Changes in _init_multi_camera() (around line 176-239):
+
+ def _init_multi_camera(self, axis_configs: List[dict]):
+     """Initialize multi-camera mode with coordinator and workers."""
+     num_cameras = len(axis_configs)
+     detection_timeout = 1.5
+
+     # Create coordinator
+     self.coordinator = CoordinatorProcess(...)
+
+     # Create detector workers
+     self.detector_workers = []
+     self.worker_frame_queues = []  # NEW: Store frame queues
+
+     for camera_id, axis_cfg in enumerate(axis_configs):
+         view_id = self.current_view + camera_id
+
+         # Create per-camera frame queue if GUI is active
+         worker_frame_queue = None
+         if self.frame_queue is not None:  # GUI mode detected
+             worker_frame_queue = Queue(maxsize=3)
+             self.worker_frame_queues.append(worker_frame_queue)
+
+         worker = DetectorWorkerProcess(
+             camera_id=camera_id,
+             view_id=view_id,
+             device=None,
+             dark_exposure=self.exposure,
+             threshold=self.threshold,
+             command_queue=self.coordinator.get_command_queue(camera_id),
+             result_queue=self.coordinator.get_result_queue(),
+             display=True,
+             axis_config=axis_cfg,
+             detection_timeout=detection_timeout,
+             frame_queue=worker_frame_queue,  # NEW
+         )
+
+         self.detector_workers.append(worker)
+         # ... rest of existing code ...
+
+ Add new method:
+ def get_worker_frame_queue(self, camera_index: int) -> Optional[Queue]:
+     """Get frame queue for specific camera worker in multi-camera mode."""
+     if not self.multi_camera_mode:
+         return None
+     if camera_index >= len(self.worker_frame_queues):
+         return None
+     return self.worker_frame_queues[camera_index]
+
+ Phase 2: GUI CLI Argument Parsing
+
+ File: marimapper/scripts/gui_cli.py
+
+ 2.1 Add multi-camera argument parsing
+
+ Add after line 78 (after single axis_config creation):
+
+ # Multi-camera configuration
+ axis_configs = None
+
+ if args.axis_cameras_json:
+     import json
+     try:
+         axis_configs = json.loads(args.axis_cameras_json)
+         if not isinstance(axis_configs, list):
+             raise Exception("--axis-cameras-json must be a JSON array")
+
+         # Validate and set defaults for each camera
+         for cfg in axis_configs:
+             if 'host' not in cfg:
+                 raise Exception("Each camera config must have 'host' field")
+             cfg.setdefault('username', 'root')
+             cfg.setdefault('password', '')
+     except json.JSONDecodeError as e:
+         raise Exception(f"Invalid JSON in --axis-cameras-json: {e}")
+
+ elif args.axis_hosts:
+     # Simple multi-camera: comma-separated hosts with shared credentials
+     hosts = [h.strip() for h in args.axis_hosts.split(',') if h.strip()]
+     if len(hosts) == 0:
+         raise Exception("--axis-hosts must contain at least one host")
+     if not args.axis_password:
+         raise Exception("--axis-password is required when using --axis-hosts")
+
+     axis_configs = [
+         {
+             'host': host,
+             'username': args.axis_username,
+             'password': args.axis_password,
+         }
+         for host in hosts
+     ]
+
+ # Validate camera count
+ if axis_configs is not None and len(axis_configs) > 9:
+     raise Exception("GUI supports maximum 9 cameras (you provided {len(axis_configs)})")
+
+ 2.2 Extend ScannerArgs class
+
+ Modify line 95 to add axis_configs field:
+
+ class ScannerArgs:
+     def __init__(self, ...):
+         # ... existing fields ...
+         self.axis_config = axis_config
+         self.axis_configs = axis_configs  # NEW
+
+ 2.3 Pass axis_configs to Scanner
+
+ Modify line 111 (Scanner initialization):
+
+ scanner = Scanner(
+     backend_factory=self.backend_factory,
+     output_dir=Path(self.output_dir),
+     exposure=self.dark_exposure,
+     threshold=self.threshold,
+     axis_config=self.axis_config,
+     axis_configs=self.axis_configs,  # NEW
+     frame_queue=frame_queue,
+     camera_model_type=self.camera_model,
+ )
+
+ Phase 3: Multi-Camera Grid Widget
+
+ 3.1 Create MultiCameraWidget class
+
+ New File: marimapper/gui/widgets/multi_camera_widget.py (~400 lines)
+
+ Key components:
+
+ from PyQt6.QtWidgets import QWidget, QGridLayout, QLabel
+ from PyQt6.QtCore import pyqtSignal, Qt
+ from PyQt6.QtGui import QPalette, QColor
+ import numpy as np
+ from marimapper.gui.widgets.detector_widget import DetectorWidget
+
+ class MultiCameraWidget(QWidget):
+     """Grid widget for displaying multiple camera feeds with independent controls."""
+
+     # Signals
+     camera_selected = pyqtSignal(int)  # Emitted when user clicks a camera
+     mask_updated = pyqtSignal(int, object)  # camera_index, mask_numpy
+
+     def __init__(self, camera_count: int, parent=None):
+         super().__init__(parent)
+
+         self.camera_count = camera_count
+         self.detector_widgets = []  # List of DetectorWidget instances
+         self.camera_labels = []  # List of QLabel overlays
+         self.active_camera = 0
+         self.fullscreen_camera = None  # None or camera_index
+
+         # Calculate grid dimensions
+         if camera_count <= 4:
+             self.grid_rows, self.grid_cols = 2, 2
+         elif camera_count <= 9:
+             self.grid_rows, self.grid_cols = 3, 3
+         else:
+             raise ValueError(f"MultiCameraWidget supports max 9 cameras, got {camera_count}")
+
+         self._setup_ui()
+
+     def _setup_ui(self):
+         """Create grid layout with camera widgets."""
+         layout = QGridLayout()
+         layout.setSpacing(2)
+         self.setLayout(layout)
+
+         # Create DetectorWidget for each camera
+         for camera_id in range(self.camera_count):
+             widget = self._create_camera_widget(camera_id)
+             self.detector_widgets.append(widget)
+
+             # Place in grid
+             row = camera_id // self.grid_cols
+             col = camera_id % self.grid_cols
+             layout.addWidget(widget, row, col)
+
+             # Connect signals
+             widget.maximize_toggled.connect(
+                 lambda checked, idx=camera_id: self.toggle_fullscreen(idx)
+             )
+             widget.mask_updated.connect(
+                 lambda mask, idx=camera_id: self.mask_updated.emit(idx, mask)
+             )
+
+         # Set initial active camera highlight
+         self.set_active_camera(0)
+
+     def _create_camera_widget(self, camera_id: int):
+         """Create DetectorWidget with camera label overlay."""
+         widget = DetectorWidget()
+
+         # Add camera label overlay
+         label = QLabel(f"Camera {camera_id + 1}", widget)
+         label.setStyleSheet("""
+             QLabel {
+                 background-color: rgba(0, 0, 0, 150);
+                 color: white;
+                 padding: 5px 10px;
+                 border-radius: 3px;
+                 font-size: 12px;
+                 font-weight: bold;
+             }
+         """)
+         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+         label.move(10, 10)
+         label.raise_()
+         label.show()
+         self.camera_labels.append(label)
+
+         # Override mousePressEvent for auto-switch behavior
+         original_mouse_press = widget.mousePressEvent
+         def camera_click_handler(event):
+             # Auto-select this camera when clicked
+             if not widget.painting_mode:
+                 self.set_active_camera(camera_id)
+                 self.camera_selected.emit(camera_id)
+             # Call original handler
+             original_mouse_press(event)
+
+         widget.mousePressEvent = camera_click_handler
+
+         return widget
+
+     def set_active_camera(self, camera_index: int):
+         """Highlight the active camera for mask editing."""
+         if camera_index < 0 or camera_index >= self.camera_count:
+             return
+
+         self.active_camera = camera_index
+
+         # Update visual indicators (highlight active camera)
+         for i, widget in enumerate(self.detector_widgets):
+             if i == camera_index:
+                 widget.setStyleSheet("border: 3px solid #00FF00;")
+             else:
+                 widget.setStyleSheet("border: 1px solid #333333;")
+
+     def update_frame(self, camera_index: int, frame: np.ndarray):
+         """Route frame to specific camera widget."""
+         if camera_index < 0 or camera_index >= len(self.detector_widgets):
+             return
+         self.detector_widgets[camera_index].update_frame(frame)
+
+     def toggle_fullscreen(self, camera_index: int):
+         """Toggle fullscreen for specific camera."""
+         if self.fullscreen_camera == camera_index:
+             # Restore grid
+             self.fullscreen_camera = None
+             self._show_grid()
+         else:
+             # Show only this camera
+             self.fullscreen_camera = camera_index
+             self._show_fullscreen(camera_index)
+
+     def _show_grid(self):
+         """Restore grid layout with all cameras visible."""
+         layout = self.layout()
+
+         # Clear layout
+         for i in reversed(range(layout.count())):
+             item = layout.itemAt(i)
+             if item and item.widget():
+                 layout.removeWidget(item.widget())
+
+         # Re-add all widgets in grid positions
+         for i, widget in enumerate(self.detector_widgets):
+             row = i // self.grid_cols
+             col = i % self.grid_cols
+             layout.addWidget(widget, row, col)
+             widget.show()
+
+     def _show_fullscreen(self, camera_index: int):
+         """Show only one camera in fullscreen."""
+         layout = self.layout()
+
+         # Hide all widgets
+         for i, widget in enumerate(self.detector_widgets):
+             if i != camera_index:
+                 widget.hide()
+                 layout.removeWidget(widget)
+
+         # Expand selected camera to full grid
+         layout.removeWidget(self.detector_widgets[camera_index])
+         layout.addWidget(
+             self.detector_widgets[camera_index],
+             0, 0,  # Start position
+             self.grid_rows, self.grid_cols  # Span entire grid
+         )
+         self.detector_widgets[camera_index].show()
+
+     def set_painting_mode(self, enabled: bool):
+         """Set painting mode for active camera only."""
+         if self.active_camera < len(self.detector_widgets):
+             self.detector_widgets[self.active_camera].set_painting_mode(enabled)
+
+     def set_brush_size(self, size: int):
+         """Set brush size for active camera only."""
+         if self.active_camera < len(self.detector_widgets):
+             self.detector_widgets[self.active_camera].set_brush_size(size)
+
+     def set_mask_visibility(self, visible: bool):
+         """Set mask visibility for active camera only."""
+         if self.active_camera < len(self.detector_widgets):
+             self.detector_widgets[self.active_camera].set_mask_visibility(visible)
+
+     def set_mask_from_numpy(self, camera_index: int, mask):
+         """Load mask for specific camera."""
+         if camera_index < len(self.detector_widgets):
+             self.detector_widgets[camera_index].set_mask_from_numpy(mask)
+
+     def clear_mask(self, camera_index: int):
+         """Clear mask for specific camera."""
+         if camera_index < len(self.detector_widgets):
+             self.detector_widgets[camera_index].set_mask_from_numpy(None)
+
+ 3.2 Update init.py
+
+ File: marimapper/gui/widgets/__init__.py
+
+ Add export:
+ from .multi_camera_widget import MultiCameraWidget
+
+ __all__ = [
+     # ... existing exports ...
+     "MultiCameraWidget",
+ ]
+
+ Phase 4: StatusMonitorThread Extension
+
+ File: marimapper/gui/worker.py
+
+ 4.1 Modify StatusMonitorThread to support multiple frame queues
+
+ class StatusMonitorThread(QThread):
+     def __init__(
+         self,
+         signals: MariMapperSignals,
+         frame_queues: Union[Queue, List[Queue]],  # Single or multiple
+         detector_update_queue: Queue2D,
+         info_3d_queue=None,
+         data_3d_queue=None,
+     ):
+         super().__init__()
+
+         # Normalize frame_queues to list
+         if isinstance(frame_queues, list):
+             self.frame_queues = frame_queues
+             self.multi_camera = True
+         else:
+             self.frame_queues = [frame_queues]
+             self.multi_camera = False
+
+         self.signals = signals
+         # ... rest of existing init ...
+
+     def run(self):
+         """Monitor all queues and emit signals."""
+         while self.running:
+             # Poll all frame queues
+             for camera_id, frame_queue in enumerate(self.frame_queues):
+                 try:
+                     if not frame_queue.empty():
+                         frame = frame_queue.get_nowait()
+                         if self.multi_camera:
+                             self.signals.frame_ready_multi.emit(camera_id, frame)
+                         else:
+                             self.signals.frame_ready.emit(frame)
+                 except queue.Empty:
+                     pass
+                 except Exception as e:
+                     logger.warning(f"Error reading frame queue {camera_id}: {e}")
+
+             # ... rest of existing polling (detector_update_queue, etc.) ...
+
+             time.sleep(0.03)
+
+ 4.2 Add new signal
+
+ File: marimapper/gui/signals.py
+
+ class MariMapperSignals(QObject):
+     # ... existing signals ...
+     frame_ready_multi = pyqtSignal(int, np.ndarray)  # camera_index, frame
+
+ Phase 5: MainWindow Integration
+
+ File: marimapper/gui/main_window.py
+
+ 5.1 Import MultiCameraWidget
+
+ Add to imports (around line 30):
+ from marimapper.gui.widgets import MultiCameraWidget
+
+ 5.2 Initialize multi_camera_widget in init
+
+ Add around line 90:
+ self.multi_camera_widget = None  # Created later if multi-camera mode
+
+ 5.3 Connect new signal in connect_signals()
+
+ Add around line 291:
+ self.signals.frame_ready_multi.connect(self.on_frame_ready_multi)
+
+ 5.4 Modify on_scanner_ready() for multi-camera detection
+
+ Modify around line 313-370:
+
+ @pyqtSlot(object, int)
+ def on_scanner_ready(self, scanner, led_count):
+     self.scanner = scanner
+
+     # ... existing setup code ...
+
+     # Detect camera count
+     if hasattr(scanner, "detector_workers") and scanner.detector_workers:
+         self.camera_count = len(scanner.detector_workers)
+         self.log_widget.log_info(f"Multi-camera mode: {self.camera_count} cameras detected")
+
+         # Replace single DetectorWidget with MultiCameraWidget
+         self._setup_multi_camera_ui()
+
+         # Create frame queues list for monitor thread
+         frame_queues = [
+             scanner.get_worker_frame_queue(i)
+             for i in range(self.camera_count)
+         ]
+     else:
+         self.camera_count = 1
+         self.log_widget.log_info("Single camera mode")
+         frame_queues = self.frame_queue  # Single queue
+
+     # Start status monitor with frame queue(s)
+     self.monitor_thread = StatusMonitorThread(
+         self.signals,
+         frame_queues,  # Can be single Queue or List[Queue]
+         detector_update_queue,
+         info_3d_queue,
+         data_3d_queue,
+     )
+     self.monitor_thread.start()
+
+     # ... rest of existing code ...
+
+ 5.5 Add _setup_multi_camera_ui() method
+
+ Add new method around line 380:
+
+ def _setup_multi_camera_ui(self):
+     """Replace single camera widget with multi-camera grid."""
+     # Remove old "Video Feed" tab (index 0)
+     self.tab_widget.removeTab(0)
+
+     # Create multi-camera widget
+     self.multi_camera_widget = MultiCameraWidget(self.camera_count)
+     self.tab_widget.insertTab(0, self.multi_camera_widget, "Camera Grid")
+
+     # Connect signals
+     self.multi_camera_widget.camera_selected.connect(self.on_camera_selected)
+     self.multi_camera_widget.mask_updated.connect(self.on_mask_updated_multi)
+
+     # Update control panel to show camera selector
+     self.control_panel.set_camera_count(self.camera_count)
+
+     # Disconnect old single-camera signals (if any were connected)
+     # ... existing code for this ...
+
+     # Disable single-camera detector widget
+     self.detector_widget.hide()
+     self.detector_widget = None
+
+ 5.6 Add frame routing for multi-camera
+
+ Add new slot around line 400:
+
+ @pyqtSlot(int, np.ndarray)
+ def on_frame_ready_multi(self, camera_index: int, frame: np.ndarray):
+     """Route frame to correct camera widget in grid."""
+     if self.multi_camera_widget is not None:
+         self.multi_camera_widget.update_frame(camera_index, frame)
+
+ 5.7 Add mask update handler for multi-camera
+
+ Add new slot around line 800:
+
+ @pyqtSlot(int, object)
+ def on_mask_updated_multi(self, camera_index: int, mask):
+     """Handle mask update from specific camera in grid."""
+     # Store mask
+     if mask is not None:
+         height, width = mask.shape
+         self.current_masks[camera_index] = mask
+         self.mask_resolutions[camera_index] = (height, width)
+     else:
+         self.current_masks.pop(camera_index, None)
+         self.mask_resolutions.pop(camera_index, None)
+
+     # Send to detector process
+     self.send_mask_to_detector(camera_index)
+
+ 5.8 Modify control signal handlers to broadcast to all cameras
+
+ Update set_threshold() around line 590:
+
+ @pyqtSlot(int)
+ def set_threshold(self, value: int):
+     """Set detection threshold for ALL cameras."""
+     if self.scanner is None:
+         return
+
+     try:
+         if self.camera_count == 1:
+             # Single camera
+             camera_queue = self.scanner.get_camera_command_queue()
+             camera_queue.put((CameraCommand.SET_THRESHOLD, value))
+         else:
+             # Multi-camera: broadcast to all workers
+             for i in range(self.camera_count):
+                 worker_queue = self.scanner.get_worker_command_queue(i)
+                 if worker_queue is not None:
+                     worker_queue.put(("SET_THRESHOLD", value))
+
+         self.log_widget.log_info(f"Threshold set to {value} for all cameras")
+     except Exception as e:
+         self.log_widget.log_error(f"Failed to set threshold: {e}")
+
+ Similar changes for:
+ - set_exposure_dark() (around line 600)
+ - set_exposure_bright() (around line 615)
+ - set_all_off() (around line 630)
+ - set_all_on() (around line 645)
+
+ 5.9 Update mask control handlers for multi-camera
+
+ Modify around line 660-690:
+
+ @pyqtSlot(bool)
+ def on_paint_mode_toggled(self, enabled: bool):
+     """Toggle painting mode for active camera."""
+     if self.multi_camera_widget is not None:
+         self.multi_camera_widget.set_painting_mode(enabled)
+     else:
+         self.detector_widget.set_painting_mode(enabled)
+
+ @pyqtSlot(int)
+ def on_brush_size_changed(self, size: int):
+     """Set brush size for active camera."""
+     if self.multi_camera_widget is not None:
+         self.multi_camera_widget.set_brush_size(size)
+     else:
+         self.detector_widget.set_brush_size(size)
+
+ @pyqtSlot(bool)
+ def on_mask_visibility_toggled(self, visible: bool):
+     """Toggle mask visibility for active camera."""
+     if self.multi_camera_widget is not None:
+         self.multi_camera_widget.set_mask_visibility(visible)
+     else:
+         self.detector_widget.set_mask_visibility(visible)
+
+ @pyqtSlot()
+ def on_clear_mask(self):
+     """Clear mask for active camera."""
+     camera_index = self.active_camera_index
+
+     if self.multi_camera_widget is not None:
+         self.multi_camera_widget.clear_mask(camera_index)
+     else:
+         self.detector_widget.set_mask_from_numpy(None)
+
+     # Remove from storage
+     self.current_masks.pop(camera_index, None)
+     self.mask_resolutions.pop(camera_index, None)
+
+     # Send to detector
+     self.send_mask_to_detector(camera_index)
+
+ Phase 6: Edge Cases & Testing
+
+ 6.1 Camera initialization failure handling
+
+ Add validation in on_scanner_ready():
+
+ # Validate all workers initialized successfully
+ if hasattr(scanner, "detector_workers"):
+     failed_cameras = []
+     for i, worker in enumerate(scanner.detector_workers):
+         if not worker.is_alive():
+             failed_cameras.append(i)
+
+     if failed_cameras:
+         QMessageBox.warning(
+             self, "Camera Initialization Failed",
+             f"Failed to initialize cameras: {', '.join(map(str, failed_cameras))}\n\n"
+             f"Check camera connections and credentials."
+         )
+
+ 6.2 Grid layout validation
+
+ Add check in MultiCameraWidget.__init__():
+
+ if camera_count < 1 or camera_count > 9:
+     raise ValueError(f"MultiCameraWidget supports 1-9 cameras, got {camera_count}")
+
+ 6.3 Backwards compatibility test
+
+ Ensure single-camera mode works exactly as before:
+ - No MultiCameraWidget created
+ - Original DetectorWidget used
+ - All signals routed correctly
+ - Mask painting works
+
+ Implementation Sequence
+
+ Step 1: Frame Delivery Infrastructure (2-3 hours)
+
+ 1. Add frame_queue parameter to DetectorWorkerProcess.init
+ 2. Modify _find_led_with_display() and _show_live_preview() to send frames
+ 3. Add worker_frame_queues list to Scanner._init_multi_camera()
+ 4. Add Scanner.get_worker_frame_queue() method
+ 5. Test: Multi-camera CLI should still work (frames to cv2.imshow as fallback)
+
+ Step 2: GUI CLI Arguments (30 minutes)
+
+ 1. Add --axis-hosts and --axis-cameras-json parsing to gui_cli.py
+ 2. Add axis_configs field to ScannerArgs
+ 3. Pass axis_configs to Scanner initialization
+ 4. Test: GUI CLI accepts multi-camera arguments without error
+
+ Step 3: Multi-Camera Widget (3-4 hours)
+
+ 1. Create multi_camera_widget.py with MultiCameraWidget class
+ 2. Implement grid layout logic (2x2 for 2-4, 3x3 for 5-9)
+ 3. Add camera labels as overlays
+ 4. Implement click-to-select auto-switch
+ 5. Implement fullscreen toggle with grid hide/show
+ 6. Test: Widget displays multiple static images in grid correctly
+
+ Step 4: StatusMonitorThread Extension (1 hour)
+
+ 1. Modify StatusMonitorThread to accept List[Queue] for frame_queues
+ 2. Add frame polling loop for all queues
+ 3. Add frame_ready_multi signal to MariMapperSignals
+ 4. Test: Monitor thread polls multiple queues without errors
+
+ Step 5: MainWindow Integration (2-3 hours)
+
+ 1. Add multi_camera_widget field to MainWindow.init
+ 2. Modify on_scanner_ready() to detect multi-camera mode
+ 3. Implement _setup_multi_camera_ui() to create grid widget
+ 4. Connect frame_ready_multi signal to on_frame_ready_multi() slot
+ 5. Add on_mask_updated_multi() handler
+ 6. Test: GUI displays live feeds from multiple cameras in grid
+
+ Step 6: Control Signal Broadcasting (1-2 hours)
+
+ 1. Update set_threshold() to broadcast to all cameras
+ 2. Update set_exposure_dark() and set_exposure_bright() to broadcast
+ 3. Update set_all_off() and set_all_on() to broadcast
+ 4. Update mask control handlers to use active camera only
+ 5. Test: Threshold/exposure changes apply to all cameras
+
+ Step 7: Edge Cases & Polish (2 hours)
+
+ 1. Add camera initialization failure detection
+ 2. Add visual indicator for active camera (green border)
+ 3. Test backwards compatibility with single camera
+ 4. Test with 1, 2, 4, and 9 camera configurations
+ 5. Verify fullscreen toggle works in all configurations
+
+ Critical Files Summary
+
+ New Files (1 file)
+
+ - marimapper/gui/widgets/multi_camera_widget.py - Grid container with N DetectorWidgets (~400 lines)
+
+ Modified Files (6 files)
+
+ 1. marimapper/detector_worker_process.py - Add frame_queue support (~30 lines added)
+ 2. marimapper/scanner.py - Create per-camera frame queues in multi-camera mode (~20 lines added)
+ 3. marimapper/scripts/gui_cli.py - Parse multi-camera arguments, add axis_configs field (~50 lines added)
+ 4. marimapper/gui/worker.py - Support multiple frame queues in StatusMonitorThread (~20 lines modified)
+ 5. marimapper/gui/signals.py - Add frame_ready_multi signal (~1 line added)
+ 6. marimapper/gui/main_window.py - Multi-camera UI setup, frame routing, control broadcasting (~150 lines
+ added/modified)
+
+ Testing Strategy
+
+ Manual Testing Checklist
+
+ - Single camera mode still works (backwards compatibility)
+ - 2 camera mode displays 2x2 grid
+ - 4 camera mode displays 2x2 grid (all filled)
+ - 9 camera mode displays 3x3 grid (all filled)
+ - Camera labels show correct numbers
+ - Clicking camera auto-selects it (green border)
+ - Control panel camera selector syncs with clicks
+ - Mask painting only affects active camera
+ - Each camera can have independent mask
+ - Fullscreen hides grid, shows only one camera
+ - Fullscreen toggle restores grid correctly
+ - Threshold changes apply to all cameras
+ - Exposure changes apply to all cameras
+ - Save/load masks work for each camera
+ - Scanning produces view files for each camera (scan_0.csv, scan_1.csv, etc.)
+
+ Unit Tests
+
+ # test/test_multi_camera_widget.py
+ def test_grid_layout_2_cameras()
+ def test_grid_layout_4_cameras()
+ def test_grid_layout_9_cameras()
+ def test_fullscreen_toggle()
+ def test_active_camera_selection()
+ def test_frame_routing()
+
+ Key Design Decisions
+
+ 1. Container Widget Pattern: MultiCameraWidget manages N DetectorWidget instances rather than modifying MainWindow
+ heavily
+ 2. Frame Queue Per Camera: Each worker gets dedicated frame_queue for clean isolation
+ 3. StatusMonitorThread Polling: Single thread polls all frame queues (simpler than N threads)
+ 4. Broadcast for Global Controls: Threshold/exposure apply to all cameras, mask editing only affects active
+ 5. Auto-Switch on Click: Clicking any camera view selects it for mask editing (UX convenience)
+ 6. Fullscreen Hides Grid: Complete replacement, not overlay (cleaner UX)
+ 7. Camera Labels as Overlays: QLabel children positioned absolutely (simple, flexible)
+
+ Backwards Compatibility Strategy
+
+ - Single-camera mode creates NO MultiCameraWidget
+ - All existing code paths unchanged for single camera
+ - Multi-camera only activated when len(axis_configs) > 1
+ - Fallback to cv2.imshow when frame_queue is None (CLI compatibility)
+
+ Future Enhancements (Out of Scope)
+
+ - Per-camera threshold/exposure settings (currently global)
+ - Camera naming/labeling customization
+ - Grid layout customization (e.g., 1x4 horizontal)
+ - Camera preview recording/playback
+ - Multi-monitor fullscreen support

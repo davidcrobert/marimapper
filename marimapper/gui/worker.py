@@ -92,16 +92,19 @@ class StatusMonitorThread(QThread):
                         if control == DetectionControlEnum.DETECT:
                             # LED detected
                             self.signals.led_detected.emit(data)
-                            self.signals.log_message.emit(
-                                "info", f"LED {data.led_id} detected at view {data.view_id}"
-                            )
 
                         elif control == DetectionControlEnum.SKIP:
                             # LED skipped (not found)
                             self.signals.led_skipped.emit(data)
-                            self.signals.log_message.emit(
-                                "warning", f"LED {data} not found, skipping"
-                            )
+                            led_id = getattr(data, "led_id", None)
+                            view_id = getattr(data, "view_id", None)
+                            if isinstance(data, dict):
+                                led_id = data.get("led_id", led_id)
+                                view_id = data.get("view_id", view_id)
+                            msg = f"LED {led_id if led_id is not None else data} not found, skipping"
+                            if view_id is not None:
+                                msg += f" (view {view_id})"
+                            self.signals.log_message.emit("warning", msg)
 
                         elif control == DetectionControlEnum.DONE:
                             # Scan completed successfully

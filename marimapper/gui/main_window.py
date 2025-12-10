@@ -11,6 +11,7 @@ import csv
 import cv2
 import json
 import numpy as np
+from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QTabWidget,
     QPushButton,
+    QProgressBar,
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QThread, pyqtSignal
 
@@ -120,6 +122,9 @@ class MainWindow(QMainWindow):
         self.leds_3d_data = []
         self.current_view_id = 0
         self.is_video_maximized = False
+        self.scan_range_start = 0
+        self.scan_range_total = 0
+        self.scan_progress_value = 0
 
         # Mask management (per-camera)
         self.current_masks = {}  # {camera_index: numpy_array}
@@ -172,10 +177,28 @@ class MainWindow(QMainWindow):
 
         # Log widget
         self.log_widget = LogWidget()
-        self.left_splitter.addWidget(self.log_widget)
+        self.scan_progress_bar = QProgressBar()
+        self.scan_progress_bar.setTextVisible(True)
+        self.scan_progress_bar.setRange(0, 1)
+        self.scan_progress_bar.setValue(0)
+        self.scan_progress_bar.setFormat("0/0")
+        self.scan_progress_bar.setMinimumHeight(18)
+
+        log_container = QWidget()
+        log_layout = QVBoxLayout()
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(4)
+        log_layout.addWidget(self.log_widget)
+        log_layout.addWidget(self.scan_progress_bar)
+        log_layout.setStretch(0, 1)
+        log_layout.setStretch(1, 0)
+        log_container.setLayout(log_layout)
+        self.log_container = log_container
+        self.left_splitter.addWidget(log_container)
 
         # Set initial sizes (tabs take more space, log reasonably tall)
         self.left_splitter.setSizes([600, 200])
+        self._reset_scan_progress()
 
         # Right side: Control panel and status table
         self.right_widget = QWidget()
@@ -311,6 +334,8 @@ class MainWindow(QMainWindow):
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
         self.signals.frame_ready_multi.connect(self.on_frame_ready_multi)
         self.signals.log_message.connect(self.log_widget.add_message)
+        self.signals.led_detected.connect(self.on_led_progress)
+        self.signals.led_skipped.connect(self.on_led_progress)
         self.signals.scan_completed.connect(self.on_scan_completed)
         self.signals.scan_failed.connect(self.on_scan_failed)
         self.signals.reconstruction_updated.connect(self.on_reconstruction_updated)
@@ -360,11 +385,11 @@ class MainWindow(QMainWindow):
         self._pre_placement_layout = {
             "main_sizes": self.main_splitter.sizes(),
             "left_sizes": self.left_splitter.sizes(),
-            "log_visible": self.log_widget.isVisible(),
+            "log_visible": self.log_container.isVisible(),
             "status_visible": self.status_table.isVisible(),
         }
 
-        self.log_widget.setVisible(False)
+        self.log_container.setVisible(False)
         self.status_table.setVisible(False)
         self.transform_controls.setVisible(False)
         self.placement_panel.setVisible(True)
@@ -403,7 +428,7 @@ class MainWindow(QMainWindow):
                 return False
         self.placement_mode_active = False
 
-        self.log_widget.setVisible(self._pre_placement_layout.get("log_visible", True) if self._pre_placement_layout else True)
+        self.log_container.setVisible(self._pre_placement_layout.get("log_visible", True) if self._pre_placement_layout else True)
         self.status_table.setVisible(self._pre_placement_layout.get("status_visible", True) if self._pre_placement_layout else True)
         self.placement_panel.setVisible(False)
         self.transform_controls.setVisible(self.tab_widget.currentWidget() == self.visualizer_3d_widget)
@@ -777,25 +802,22 @@ class MainWindow(QMainWindow):
         self.log_widget.log_info(f"3D info queue created: {info_3d_queue is not None}")
         self.log_widget.log_info(f"3D data queue created: {data_3d_queue is not None}")
 
-        # Detect camera count for multi-camera support (do this early!)
-        if hasattr(scanner, "detector_workers") and scanner.detector_workers:
-            # Multi-camera mode
-            self.camera_count = len(scanner.detector_workers)
-            self.log_widget.log_info(f"Multi-camera mode detected: {self.camera_count} cameras")
+        # Detect camera count (unified architecture always has num_cameras)
+        self.camera_count = scanner.num_cameras
+        self.log_widget.log_info(f"Scanner initialized with {self.camera_count} camera(s)")
 
-            # Get worker frame queues for multi-camera
-            frame_queues = [
-                scanner.get_worker_frame_queue(i)
-                for i in range(self.camera_count)
-            ]
+        # Get detector frame queues
+        frame_queues = [
+            scanner.get_detector_frame_queue(i)
+            for i in range(self.camera_count)
+        ]
 
-            # Replace single-camera UI with multi-camera grid
+        # If multi-camera, replace single-camera UI with multi-camera grid
+        if self.camera_count > 1:
             self._setup_multi_camera_ui()
         else:
-            # Single camera mode
-            self.camera_count = 1
-            self.log_widget.log_info("Single camera mode")
-            frame_queues = self.frame_queue  # Single queue
+            # Single camera: use the single frame queue
+            frame_queues = frame_queues[0] if frame_queues else self.frame_queue
 
         # Start status monitor thread with appropriate frame queues
         self.monitor_thread = StatusMonitorThread(
@@ -806,12 +828,9 @@ class MainWindow(QMainWindow):
         self.log_widget.log_info("Monitor thread started, watching for 3D info updates...")
 
         # Log diagnostic information
-        if self.camera_count == 1:
-            self.log_widget.log_info(f"Detector process alive: {scanner.detector.is_alive()}")
-        else:
-            alive_workers = sum(1 for w in scanner.detector_workers if w.is_alive())
-            self.log_widget.log_info(f"Detector workers alive: {alive_workers}/{self.camera_count}")
-        self.log_widget.log_info(f"Frame queue created: {self.frame_queue is not None}")
+        alive_detectors = sum(1 for d in scanner.detectors if d.is_alive())
+        self.log_widget.log_info(f"Detectors alive: {alive_detectors}/{self.camera_count}")
+        self.log_widget.log_info(f"Coordinator alive: {scanner.coordinator.is_alive()}")
 
         # Enable controls now that scanner is ready
         self.control_panel.start_button.setEnabled(True)
@@ -907,7 +926,10 @@ class MainWindow(QMainWindow):
 
         try:
             self.log_widget.log_info(f"Starting scan: LEDs {led_from} to {led_to}, view {self.current_view_id}")
-            self.scanner.detector.detect(led_from, led_to, self.current_view_id)
+            # Initialize progress bar for this scan
+            self._reset_scan_progress(led_from, led_to)
+            # Use unified coordinator for all camera counts
+            self.scanner.coordinator.request_scan(led_from, led_to, self.current_view_id)
             self.statusBar().showMessage(f"Scanning LEDs {led_from}-{led_to}...")
 
         except Exception as e:
@@ -922,13 +944,10 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            camera_queue = self.scanner.get_camera_command_queue()
-            if camera_queue is not None:
-                camera_queue.put(CameraCommand.CANCEL_SCAN)
-                self.log_widget.log_info("Scan cancellation requested")
-                self.statusBar().showMessage("Cancelling scan...")
-            else:
-                self.log_widget.log_warning("Cannot cancel scan in multi-camera mode (not yet supported)")
+            # Use coordinator's cancel_scan method (works for all camera counts)
+            self.scanner.coordinator.cancel_scan()
+            self.log_widget.log_info("Scan cancellation requested")
+            self.statusBar().showMessage("Cancelling scan...")
         except Exception as e:
             self.log_widget.log_error(f"Failed to cancel scan: {str(e)}")
 
@@ -940,20 +959,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self.camera_count == 1:
-                # Single camera mode
-                from marimapper.detector_process import CameraCommand
-                camera_queue = self.scanner.get_camera_command_queue()
-                camera_queue.put(CameraCommand.SET_DARK)
-                self.log_widget.log_info("Camera set to DARK mode")
-            else:
-                # Multi-camera mode: broadcast to all workers
-                for i in range(self.camera_count):
-                    worker_queue = self.scanner.get_worker_command_queue(i)
-                    if worker_queue is not None:
-                        worker_queue.put(("SET_DARK",))
-                self.log_widget.log_info(f"All {self.camera_count} cameras set to DARK mode")
+            # Broadcast to all detectors (works for any number of cameras)
+            for i in range(self.camera_count):
+                detector_queue = self.scanner.get_detector_command_queue(i)
+                if detector_queue is not None:
+                    detector_queue.put(("SET_DARK",))
 
+            cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
+            self.log_widget.log_info(f"All {cameras_msg} set to DARK mode")
             self.statusBar().showMessage("Camera: Dark mode")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set dark mode: {str(e)}")
@@ -966,20 +979,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self.camera_count == 1:
-                # Single camera mode
-                from marimapper.detector_process import CameraCommand
-                camera_queue = self.scanner.get_camera_command_queue()
-                camera_queue.put(CameraCommand.SET_BRIGHT)
-                self.log_widget.log_info("Camera set to BRIGHT mode")
-            else:
-                # Multi-camera mode: broadcast to all workers
-                for i in range(self.camera_count):
-                    worker_queue = self.scanner.get_worker_command_queue(i)
-                    if worker_queue is not None:
-                        worker_queue.put(("SET_BRIGHT",))
-                self.log_widget.log_info(f"All {self.camera_count} cameras set to BRIGHT mode")
+            # Broadcast to all detectors (works for any number of cameras)
+            for i in range(self.camera_count):
+                detector_queue = self.scanner.get_detector_command_queue(i)
+                if detector_queue is not None:
+                    detector_queue.put(("SET_BRIGHT",))
 
+            cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
+            self.log_widget.log_info(f"All {cameras_msg} set to BRIGHT mode")
             self.statusBar().showMessage("Camera: Bright mode")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set bright mode: {str(e)}")
@@ -992,23 +999,74 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self.camera_count == 1:
-                # Single camera mode
-                from marimapper.detector_process import CameraCommand
-                camera_queue = self.scanner.get_camera_command_queue()
-                camera_queue.put((CameraCommand.SET_THRESHOLD, value))
-                self.log_widget.log_info(f"Detection threshold set to {value}")
-            else:
-                # Multi-camera mode: broadcast to all workers
-                for i in range(self.camera_count):
-                    worker_queue = self.scanner.get_worker_command_queue(i)
-                    if worker_queue is not None:
-                        worker_queue.put(("SET_THRESHOLD", value))
-                self.log_widget.log_info(f"Threshold set to {value} for all {self.camera_count} cameras")
+            # Broadcast to all detectors (works for any number of cameras)
+            for i in range(self.camera_count):
+                detector_queue = self.scanner.get_detector_command_queue(i)
+                if detector_queue is not None:
+                    detector_queue.put(("SET_THRESHOLD", value))
 
+            cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
+            self.log_widget.log_info(f"Threshold set to {value} for all {cameras_msg}")
             self.statusBar().showMessage(f"Threshold: {value}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set threshold: {str(e)}")
+
+    def _reset_scan_progress(self, led_from: Optional[int] = None, led_to: Optional[int] = None):
+        """Initialize or clear the scan progress bar."""
+        if led_from is not None and led_to is not None and led_to > led_from:
+            self.scan_range_start = led_from
+            self.scan_range_total = led_to - led_from
+        else:
+            self.scan_range_start = 0
+            self.scan_range_total = 0
+
+        self.scan_progress_value = 0
+
+        if self.scan_range_total > 0:
+            self.scan_progress_bar.setRange(0, self.scan_range_total)
+            self.scan_progress_bar.setValue(0)
+            self.scan_progress_bar.setFormat(f"0/{self.scan_range_total}")
+        else:
+            self.scan_progress_bar.setRange(0, 1)
+            self.scan_progress_bar.setValue(0)
+            self.scan_progress_bar.setFormat("0/0")
+
+    @pyqtSlot(int)
+    @pyqtSlot(object)
+    def on_led_progress(self, data):
+        """Update scan progress bar when a LED is processed."""
+        if self.scan_range_total <= 0:
+            return
+
+        led_id = None
+        # Support LED2D objects, plain ints, or dict payloads
+        if hasattr(data, "led_id"):
+            led_id = data.led_id
+        elif isinstance(data, dict) and "led_id" in data:
+            led_id = data.get("led_id")
+        else:
+            try:
+                led_id = int(data)
+            except Exception:
+                return
+
+        if led_id is None:
+            return
+
+        try:
+            led_id = int(led_id)
+        except Exception:
+            return
+
+        current = led_id - self.scan_range_start + 1
+        if current < 0:
+            current = 0
+        if current > self.scan_range_total:
+            current = self.scan_range_total
+
+        self.scan_progress_value = current
+        self.scan_progress_bar.setValue(current)
+        self.scan_progress_bar.setFormat(f"{current}/{self.scan_range_total}")
 
     @pyqtSlot()
     def set_all_off(self):
@@ -1106,12 +1164,12 @@ class MainWindow(QMainWindow):
         if maximize:
             # Hide the right panel and log widget
             self.right_widget.hide()
-            self.log_widget.hide()
+            self.log_container.hide()
             self.statusBar().showMessage("Video maximized (double-click or click button to restore)")
         else:
             # Restore all panels
             self.right_widget.show()
-            self.log_widget.show()
+            self.log_container.show()
             # Restore splitter sizes
             self.main_splitter.setSizes(self.original_splitter_sizes)
             self.statusBar().showMessage("Video restored")
@@ -1126,6 +1184,11 @@ class MainWindow(QMainWindow):
         """
         self.control_panel.scan_completed()
         self.current_view_id += 1
+        # Fill progress bar on completion
+        if self.scan_range_total > 0:
+            self.scan_progress_value = self.scan_range_total
+            self.scan_progress_bar.setValue(self.scan_range_total)
+            self.scan_progress_bar.setFormat(f"{self.scan_range_total}/{self.scan_range_total}")
         self.statusBar().showMessage(f"Scan completed for view {view_id}")
 
     @pyqtSlot(str)
@@ -1138,6 +1201,8 @@ class MainWindow(QMainWindow):
         """
         self.control_panel.scan_failed(error_msg)
         self.statusBar().showMessage("Scan failed")
+        # Reset progress bar on failure
+        self._reset_scan_progress()
 
     @pyqtSlot()
     def save_transformed_cloud(self):
@@ -1389,7 +1454,7 @@ class MainWindow(QMainWindow):
                 )
 
     def send_mask_to_detector(self, camera_index: int):
-        """Send mask to detector process via CameraCommand."""
+        """Send mask to detector process."""
         if self.scanner is None:
             return
 
@@ -1401,28 +1466,18 @@ class MainWindow(QMainWindow):
             # Prepare mask dict (None mask_data will clear mask)
             mask_dict = {"mask": mask_data, "resolution": mask_res}
 
-            # For single-camera: send to DetectorProcess camera_command_queue
-            if self.camera_count == 1:
-                camera_queue = self.scanner.get_camera_command_queue()
-                camera_queue.put((CameraCommand.SET_MASK, mask_dict))
-                self.log_widget.log_info("Mask sent to detector process")
+            # Send to specific detector (works for any number of cameras)
+            detector_queue = self.scanner.get_detector_command_queue(camera_index)
+            if detector_queue is not None:
+                detector_queue.put(("SET_MASK", mask_dict))
+                self.log_widget.log_info(f"Mask sent to detector {camera_index}")
             else:
-                # For multi-camera: send to specific DetectorWorkerProcess
-                worker_queue = self.scanner.get_worker_command_queue(camera_index)
-                if worker_queue is not None:
-                    worker_queue.put(("SET_MASK", mask_dict))
-                    self.log_widget.log_info(
-                        f"Mask sent to camera {camera_index} worker"
-                    )
-                else:
-                    self.log_widget.log_error(
-                        f"Failed to get command queue for camera {camera_index}"
-                    )
+                self.log_widget.log_error(
+                    f"Failed to get command queue for detector {camera_index}"
+                )
 
         except Exception as e:
-            self.log_widget.log_error(
-                f"Failed to send mask to detector: {e}"
-            )
+            self.log_widget.log_error(f"Failed to send mask to detector: {e}")
 
     def auto_load_masks(self):
         """Auto-load saved masks for all cameras on startup (session-only)."""

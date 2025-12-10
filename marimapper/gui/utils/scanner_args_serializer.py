@@ -111,6 +111,20 @@ def deserialize_axis_config(axis_config_data: Optional[Dict[str, str]]) -> Optio
     return axis_config_data
 
 
+def serialize_axis_configs(axis_configs: Optional[list[dict]]) -> Optional[list[dict]]:
+    """
+    Serialize list of camera configs (Axis or USB).
+    """
+    return axis_configs
+
+
+def deserialize_axis_configs(axis_configs_data: Optional[list[dict]]) -> Optional[list[dict]]:
+    """
+    Deserialize list of camera configs (Axis or USB).
+    """
+    return axis_configs_data
+
+
 def serialize_scanner_args(scanner_args: Any, backend_type: str) -> Dict[str, Any]:
     """
     Convert ScannerArgs object to JSON-serializable dictionary.
@@ -133,6 +147,7 @@ def serialize_scanner_args(scanner_args: Any, backend_type: str) -> Dict[str, An
             "threshold": scanner_args.threshold,
             "camera_model": scanner_args.camera_model,
             "axis_config": serialize_axis_config(getattr(scanner_args, 'axis_config', None)),
+            "axis_configs": serialize_axis_configs(getattr(scanner_args, 'axis_configs', None)),
         },
         "scanner": {
             "led_start": scanner_args.led_start,
@@ -185,6 +200,7 @@ def deserialize_scanner_args(config: Dict[str, Any], output_dir: Path) -> Any:
             self.check_movement = scanner_config["check_movement"]
             self.camera_model = camera_config["camera_model"]
             self.axis_config = deserialize_axis_config(camera_config.get("axis_config"))
+            self.axis_configs = deserialize_axis_configs(camera_config.get("axis_configs"))
 
     return ScannerArgs(), backend_type
 

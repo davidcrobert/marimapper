@@ -49,24 +49,42 @@ def main():
 
     # Build camera configuration
     axis_config = None
-    axis_configs = None
+    camera_configs = None
 
-    if args.axis_cameras_json:
-        # Multi-camera mode with JSON config
+    def _normalize_camera_cfg(cfg):
+        if not isinstance(cfg, dict):
+            raise Exception("Each camera config must be an object")
+        if "host" in cfg:
+            cfg = dict(cfg)
+            cfg.setdefault("username", "root")
+            cfg.setdefault("password", "")
+            return {"host": cfg["host"], "username": cfg["username"], "password": cfg["password"]}
+        if "device" in cfg:
+            try:
+                device_idx = int(cfg["device"])
+            except Exception:
+                raise Exception("Camera config 'device' must be an integer")
+            return {"device": device_idx}
+        raise Exception("Camera config must include either 'host' (Axis) or 'device' (USB)")
+
+    def _parse_json_list(raw_json: str):
         import json
         try:
-            axis_configs = json.loads(args.axis_cameras_json)
-            if not isinstance(axis_configs, list):
-                raise Exception("--axis-cameras-json must be a JSON array")
-            # Validate and set defaults
-            for cfg in axis_configs:
-                if 'host' not in cfg:
-                    raise Exception("Each camera config must have 'host' field")
-                cfg.setdefault('username', 'root')
-                cfg.setdefault('password', '')
-            logger.info(f"Multi-camera mode: {len(axis_configs)} cameras configured from JSON")
+            cfgs = json.loads(raw_json)
         except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON in --axis-cameras-json: {e}")
+            raise Exception(f"Invalid JSON in camera configs: {e}")
+        if not isinstance(cfgs, list):
+            raise Exception("Camera configs JSON must be an array")
+        return [_normalize_camera_cfg(cfg) for cfg in cfgs]
+
+    if args.axis_cameras_json:
+        # Multi-camera mode with JSON config (Axis or USB/mixed)
+        camera_configs = _parse_json_list(args.axis_cameras_json)
+        logger.info(f"Multi-camera mode: {len(camera_configs)} cameras configured from JSON")
+
+    elif args.camera_configs_json:
+        camera_configs = _parse_json_list(args.camera_configs_json)
+        logger.info(f"Multi-camera mode: {len(camera_configs)} cameras configured from JSON")
 
     elif args.axis_hosts:
         # Multi-camera mode with simple comma-separated hosts
@@ -76,7 +94,7 @@ def main():
         if not args.axis_password:
             raise Exception("--axis-password is required when using --axis-hosts")
 
-        axis_configs = [
+        camera_configs = [
             {
                 'host': host,
                 'username': args.axis_username,
@@ -84,7 +102,17 @@ def main():
             }
             for host in hosts
         ]
-        logger.info(f"Multi-camera mode: {len(axis_configs)} cameras configured from --axis-hosts")
+        logger.info(f"Multi-camera mode: {len(camera_configs)} cameras configured from --axis-hosts")
+
+    elif args.devices:
+        try:
+            device_ids = [int(d.strip()) for d in args.devices.split(',') if d.strip()]
+        except Exception:
+            raise Exception("--devices must be a comma-separated list of integers")
+        if len(device_ids) == 0:
+            raise Exception("--devices must contain at least one device index")
+        camera_configs = [{"device": d} for d in device_ids]
+        logger.info(f"Multi-camera mode: {len(camera_configs)} USB cameras configured from --devices")
 
     elif args.axis_host:
         # Single camera mode (existing behavior)
@@ -111,7 +139,7 @@ def main():
         args.disable_movement_check,
         args.camera_model,
         axis_config=axis_config,
-        axis_configs=axis_configs,
+        axis_configs=camera_configs,
     )
 
     scanner.mainloop()

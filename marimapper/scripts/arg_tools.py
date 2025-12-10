@@ -20,6 +20,13 @@ def add_camera_args(parser):
     )
 
     camera_options.add_argument(
+        "--devices",
+        type=str,
+        help="Multi-camera: Comma-separated list of USB camera device indices (e.g., '0,1,2').",
+        default=None,
+    )
+
+    camera_options.add_argument(
         "--axis-host",
         type=str,
         help="Axis camera IP address or hostname (e.g., 192.168.1.100). If specified, uses Axis camera instead of USB webcam",
@@ -54,6 +61,16 @@ def add_camera_args(parser):
         help="Multi-camera mode: JSON array of camera configs with per-camera credentials. "
              "Example: '[{\"host\":\"192.168.1.100\",\"username\":\"root\",\"password\":\"pwd1\"},"
              "{\"host\":\"192.168.1.101\",\"username\":\"root\",\"password\":\"pwd2\"}]'",
+        default=None,
+    )
+
+    camera_options.add_argument(
+        "--camera-configs-json",
+        type=str,
+        help="Multi-camera mode: JSON array of camera configs. Each entry can be Axis (host/username/password) "
+             "or USB (device index). Example: "
+             "'[{\"host\":\"192.168.1.100\",\"username\":\"root\",\"password\":\"pwd1\"},"
+             "{\"device\":0},{\"device\":1}]'",
         default=None,
     )
 

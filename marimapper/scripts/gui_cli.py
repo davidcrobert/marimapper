@@ -68,6 +68,34 @@ def main():
 
     # Build axis_config if axis-host is specified
     axis_config = None
+    camera_configs = None
+
+    def _normalize_camera_cfg(cfg):
+        if not isinstance(cfg, dict):
+            raise Exception("Each camera config must be an object")
+        if "host" in cfg:
+            cfg = dict(cfg)
+            cfg.setdefault("username", "root")
+            cfg.setdefault("password", "")
+            return {"host": cfg["host"], "username": cfg["username"], "password": cfg["password"]}
+        if "device" in cfg:
+            try:
+                device_idx = int(cfg["device"])
+            except Exception:
+                raise Exception("Camera config 'device' must be an integer")
+            return {"device": device_idx}
+        raise Exception("Camera config must include either 'host' (Axis) or 'device' (USB)")
+
+    def _parse_json_list(raw_json: str):
+        import json
+        try:
+            cfgs = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON in camera configs: {e}")
+        if not isinstance(cfgs, list):
+            raise Exception("Camera configs JSON must be an array")
+        return [_normalize_camera_cfg(cfg) for cfg in cfgs]
+
     if args.axis_host:
         if not args.axis_password:
             raise Exception("--axis-password is required when using --axis-host")
@@ -77,24 +105,12 @@ def main():
             'password': args.axis_password,
         }
 
-    # Multi-camera configuration
-    axis_configs = None
+    # Multi-camera configuration (Axis, USB, or mixed)
+    if args.camera_configs_json:
+        camera_configs = _parse_json_list(args.camera_configs_json)
 
-    if args.axis_cameras_json:
-        import json
-        try:
-            axis_configs = json.loads(args.axis_cameras_json)
-            if not isinstance(axis_configs, list):
-                raise Exception("--axis-cameras-json must be a JSON array")
-
-            # Validate and set defaults for each camera
-            for cfg in axis_configs:
-                if 'host' not in cfg:
-                    raise Exception("Each camera config must have 'host' field")
-                cfg.setdefault('username', 'root')
-                cfg.setdefault('password', '')
-        except json.JSONDecodeError as e:
-            raise Exception(f"Invalid JSON in --axis-cameras-json: {e}")
+    elif args.axis_cameras_json:
+        camera_configs = _parse_json_list(args.axis_cameras_json)
 
     elif args.axis_hosts:
         # Simple multi-camera: comma-separated hosts with shared credentials
@@ -104,7 +120,7 @@ def main():
         if not args.axis_password:
             raise Exception("--axis-password is required when using --axis-hosts")
 
-        axis_configs = [
+        camera_configs = [
             {
                 'host': host,
                 'username': args.axis_username,
@@ -113,9 +129,18 @@ def main():
             for host in hosts
         ]
 
+    elif args.devices:
+        try:
+            device_ids = [int(d.strip()) for d in args.devices.split(',') if d.strip()]
+        except Exception:
+            raise Exception("--devices must be a comma-separated list of integers")
+        if len(device_ids) == 0:
+            raise Exception("--devices must contain at least one device index")
+        camera_configs = [{"device": d} for d in device_ids]
+
     # Validate camera count
-    if axis_configs is not None and len(axis_configs) > 9:
-        raise Exception(f"GUI supports maximum 9 cameras (you provided {len(axis_configs)})")
+    if camera_configs is not None and len(camera_configs) > 9:
+        raise Exception(f"GUI supports maximum 9 cameras (you provided {len(camera_configs)})")
 
     # Create scanner args object that MainWindow expects
     class ScannerArgs:
@@ -133,7 +158,7 @@ def main():
             self.check_movement = not args.disable_movement_check
             self.camera_model = args.camera_model
             self.axis_config = axis_config
-            self.axis_configs = axis_configs
+            self.axis_configs = camera_configs
 
     scanner_args = ScannerArgs()
 

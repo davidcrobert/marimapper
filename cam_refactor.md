@@ -563,3 +563,33 @@ The coordinator should have a cancel event. On cancellation:
 - `marimapper/detector_process.py`
 - `marimapper/detector_worker_process.py`
 - `marimapper/coordinator_process.py`
+
+---
+
+## Plan: Extend Multi-Cam to Webcams (USB)
+
+Goal: allow multi-camera scanning with USB webcams in addition to AXIS IP cameras, reusing the unified coordinator/detector architecture.
+
+1) **Config & CLI wiring**
+- Add multi-device parsing to CLI/GUI: accept `--devices "0,1,2"` or mixed configs (USB + AXIS). Serialize per-camera entries into `axis_configs`-style lists (with a `device` key for USB).
+- Update `scanner_args_serializer` and project save/load to persist the per-camera device list.
+
+2) **Camera abstraction hardening**
+- Ensure `marimapper.camera.Camera` cleanly supports a `device`-only config in multi-cam (no `host`). Validate the unified detector passes device IDs through when axis_config is absent.
+- Add explicit resolution/FPS overrides per camera to avoid driver defaults diverging between webcams.
+
+3) **Coordinator/detector plumbing**
+- Keep using `UnifiedCoordinator` + `UnifiedDetector`; no protocol changes. Confirm command queues remain per-detector and that `frame_queue` creation works with USB sources.
+- Ensure dark/bright exposure setters degrade gracefully for webcams (if iris/auto-exposure controls are unavailable, log-and-continue without blocking refresh).
+
+4) **GUI UX**
+- Allow selecting between “AXIS hosts” and “USB devices” in the GUI start dialog; show detected OS camera indices to reduce guesswork.
+- Maintain the multi-camera grid; label tiles with the source (`USB 0`, `USB 1`, `AXIS 192.168.x.x`).
+
+5) **Diagnostics & safeguards**
+- Add a pre-flight check that all requested devices/hosts are reachable and unique; fail fast with actionable errors.
+- Log per-camera backend type so issues (driver vs network) are easy to separate.
+
+6) **Testing matrix**
+- 2–3 USB webcams; mixed USB + AXIS; all USB dark/bright toggling; scan progress and masks; darkness check behavior when exposure control is limited.
+- Validate output parity (scan CSVs, 3D map) between AXIS-only and USB/mixed setups.

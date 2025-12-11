@@ -8,6 +8,7 @@ import subprocess
 import platform
 import threading
 import queue
+import time
 import numpy as np
 import logging
 from typing import Optional
@@ -21,6 +22,9 @@ class FFmpegCapture:
 
     Uses platform-specific FFmpeg commands to capture raw video frames
     and provides them as numpy arrays compatible with OpenCV.
+
+    Uses a background reader thread to continuously capture frames and
+    maintain only the latest frame, ensuring low-latency preview on all platforms.
     """
 
     def __init__(self, device_identifier: str, width: int = 1280, height: int = 720, fps: int = 30):
@@ -48,6 +52,13 @@ class FFmpegCapture:
         self.log_thread: Optional[threading.Thread] = None
         self.is_running_flag = False
 
+        # Background reader thread for low-latency capture
+        self._reader_thread: Optional[threading.Thread] = None
+        self._latest_frame: Optional[np.ndarray] = None
+        self._frame_lock = threading.Lock()
+        self._frame_event = threading.Event()  # Signals when new frame is available
+        self._stop_reader = threading.Event()
+
         logger.info(f"FFmpegCapture initialized for {device_identifier} at {width}x{height}@{fps}fps")
 
     def start(self) -> None:
@@ -60,11 +71,12 @@ class FFmpegCapture:
         logger.debug(f"Starting FFmpeg: {' '.join(cmd)}")
 
         try:
+            # Use large buffer to prevent FFmpeg from blocking
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=self.frame_size * 2  # Small buffer: only 2 frames to reduce latency
+                bufsize=100 * 1024 * 1024  # 100MB buffer like ffmpeg_runner.py
             )
 
             # Start background thread to monitor stderr for errors
@@ -75,6 +87,18 @@ class FFmpegCapture:
                 daemon=True
             )
             self.log_thread.start()
+
+            # Start background reader thread for low-latency frame capture
+            self._stop_reader.clear()
+            self._reader_thread = threading.Thread(
+                target=self._background_reader,
+                daemon=True
+            )
+            self._reader_thread.start()
+
+            # Wait for first frame to ensure capture is working
+            if not self._frame_event.wait(timeout=5.0):
+                raise RuntimeError("Timeout waiting for first frame from FFmpeg")
 
             self.is_running_flag = True
             logger.info("FFmpeg capture started successfully")
@@ -87,13 +111,13 @@ class FFmpegCapture:
         except Exception as e:
             raise RuntimeError(f"Failed to start FFmpeg capture: {e}")
 
-    def read(self, get_latest: bool = False) -> np.ndarray:
+    def read(self, get_latest: bool = True) -> np.ndarray:
         """
         Read a frame from the camera.
 
         Args:
-            get_latest: If True, drain the buffer and return only the latest frame.
-                       This reduces latency but may drop frames.
+            get_latest: Kept for API compatibility, but now always returns
+                       the latest frame (no lag). Default changed to True.
 
         Returns:
             BGR frame as numpy array (height, width, 3)
@@ -107,12 +131,8 @@ class FFmpegCapture:
         # Check for FFmpeg errors
         self._check_for_errors()
 
-        if get_latest:
-            # Drain buffer to get latest frame
-            return self._read_latest_frame()
-        else:
-            # Read next available frame
-            return self._read_single_frame()
+        # Always return the latest frame from background reader
+        return self._get_latest_frame()
 
     def _read_single_frame(self) -> np.ndarray:
         """Read a single frame from the buffer."""
@@ -136,37 +156,71 @@ class FFmpegCapture:
         frame = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((self.height, self.width, 3))
         return frame
 
-    def _read_latest_frame(self) -> np.ndarray:
+    def _background_reader(self) -> None:
         """
-        Drain the buffer and return only the latest frame.
+        Background thread that continuously reads frames from FFmpeg.
 
-        This is useful for preview/display to reduce latency.
+        Maintains only the latest frame for low-latency access.
+        This approach works on all platforms including Windows.
         """
-        import select
+        logger.debug("Background reader thread started")
+        frames_read = 0
 
-        frame = None
+        while not self._stop_reader.is_set():
+            try:
+                # Read frame from FFmpeg (blocking)
+                raw_bytes = self.process.stdout.read(self.frame_size)
 
-        # Keep reading while data is available
-        while True:
-            # Check if data is available (non-blocking)
-            if self.platform == 'Windows':
-                # Windows doesn't support select on pipes, just read one frame
-                frame = self._read_single_frame()
-                break
-            else:
-                # Linux/Mac: use select to check for data
-                readable, _, _ = select.select([self.process.stdout], [], [], 0)
-                if readable:
-                    frame = self._read_single_frame()
-                else:
-                    # No more data available
+                if len(raw_bytes) == 0:
+                    logger.warning("FFmpeg pipe closed in background reader")
                     break
 
-        if frame is None:
-            # No frames available, do blocking read
-            frame = self._read_single_frame()
+                if len(raw_bytes) != self.frame_size:
+                    logger.warning(f"Incomplete frame in background reader: {len(raw_bytes)}/{self.frame_size}")
+                    continue
 
-        return frame
+                # Convert to numpy array
+                frame = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(
+                    (self.height, self.width, 3)
+                )
+
+                # Store as latest frame (thread-safe)
+                with self._frame_lock:
+                    self._latest_frame = frame
+
+                # Signal that a frame is available
+                self._frame_event.set()
+
+                frames_read += 1
+                if frames_read == 1:
+                    logger.debug("First frame captured by background reader")
+
+            except Exception as e:
+                if not self._stop_reader.is_set():
+                    logger.error(f"Background reader error: {e}")
+                break
+
+        logger.debug(f"Background reader thread stopped after {frames_read} frames")
+
+    def _get_latest_frame(self) -> np.ndarray:
+        """
+        Get the latest frame captured by the background reader.
+
+        Returns:
+            BGR frame as numpy array (height, width, 3)
+
+        Raises:
+            Exception: If no frame is available
+        """
+        # Wait briefly for a frame if none available
+        if not self._frame_event.wait(timeout=1.0):
+            raise Exception("Timeout waiting for frame from background reader")
+
+        with self._frame_lock:
+            if self._latest_frame is None:
+                raise Exception("No frame available from background reader")
+            # Return a copy to avoid race conditions
+            return self._latest_frame.copy()
 
     def flush(self, count: int = 30) -> None:
         """
@@ -196,6 +250,9 @@ class FFmpegCapture:
         logger.info("Stopping FFmpeg capture")
         self.is_running_flag = False
 
+        # Signal background reader to stop
+        self._stop_reader.set()
+
         if self.process is not None:
             try:
                 self.process.terminate()
@@ -206,7 +263,16 @@ class FFmpegCapture:
             except Exception as e:
                 logger.error(f"Error stopping FFmpeg: {e}")
 
+        # Wait for reader thread to finish
+        if self._reader_thread is not None and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=1.0)
+
+        # Reset state
         self.process = None
+        self._reader_thread = None
+        self._latest_frame = None
+        self._frame_event.clear()
+
         logger.info("FFmpeg capture stopped")
 
     def is_running(self) -> bool:

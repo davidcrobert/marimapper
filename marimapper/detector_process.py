@@ -419,7 +419,7 @@ class DetectorProcess(Process):
                     else:
                         # CLI mode: Show window
                         show_image(image)
-                    time.sleep(1 / 60)
+                    # No sleep needed - background reader provides fresh frames on demand
 
                 if self._render_backend_info and not self._input_3d_info_queue.empty():
                     led_info: dict[int, LEDInfo] = self._input_3d_info_queue.get()

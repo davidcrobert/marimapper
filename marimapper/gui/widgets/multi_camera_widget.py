@@ -40,8 +40,10 @@ class MultiCameraWidget(QWidget):
         self.fullscreen_camera = None  # None or camera_index
         self._painting_mode_enabled = False  # Global painting mode state
 
-        # Calculate grid dimensions
-        if camera_count <= 4:
+        # Calculate grid dimensions based on actual camera count
+        if camera_count == 1:
+            self.grid_rows, self.grid_cols = 1, 1
+        elif camera_count <= 4:
             self.grid_rows, self.grid_cols = 2, 2
         elif camera_count <= 9:
             self.grid_rows, self.grid_cols = 3, 3
@@ -75,6 +77,13 @@ class MultiCameraWidget(QWidget):
                 lambda mask, idx=camera_id: self.mask_updated.emit(idx, mask)
             )
 
+        # Set equal stretch factors for all rows and columns in the grid
+        # This ensures widgets shrink proportionally to fit in the same space
+        for row in range(self.grid_rows):
+            layout.setRowStretch(row, 1)
+        for col in range(self.grid_cols):
+            layout.setColumnStretch(col, 1)
+
         # Set initial active camera highlight
         self.set_active_camera(0)
 
@@ -89,6 +98,19 @@ class MultiCameraWidget(QWidget):
             DetectorWidget instance
         """
         widget = DetectorWidget()
+
+        # Remove minimum size constraint to allow proper grid sizing
+        # In multi-camera mode, widgets need to shrink to fit the grid
+        widget.video_label.setMinimumSize(0, 0)
+
+        # Prevent the label from resizing based on pixmap content
+        # This keeps widgets constrained to their grid cell size
+        from PyQt6.QtWidgets import QSizePolicy
+        widget.video_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Ignored
+        )
+        widget.video_label.setScaledContents(False)  # We handle scaling manually
 
         # Add camera label overlay
         label = QLabel(f"Camera {camera_id + 1}", widget)

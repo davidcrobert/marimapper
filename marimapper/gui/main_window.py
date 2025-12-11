@@ -870,6 +870,7 @@ class MainWindow(QMainWindow):
         # Connect signals
         self.multi_camera_widget.camera_selected.connect(self.on_camera_selected)
         self.multi_camera_widget.mask_updated.connect(self.on_mask_updated_multi)
+        self.multi_camera_widget.fullscreen_toggled.connect(self.toggle_video_maximize)
 
         # Reconnect mask control signals from detector_widget to multi_camera_widget
         # (These were originally connected in _connect_signals to detector_widget)

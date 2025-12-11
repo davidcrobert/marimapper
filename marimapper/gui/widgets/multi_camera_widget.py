@@ -19,6 +19,7 @@ class MultiCameraWidget(QWidget):
     # Signals
     camera_selected = pyqtSignal(int)  # Emitted when user clicks a camera
     mask_updated = pyqtSignal(int, object)  # camera_index, mask_numpy
+    fullscreen_toggled = pyqtSignal(bool)  # True when a camera is fullscreen
 
     def __init__(self, camera_count: int, parent=None):
         """
@@ -195,10 +196,12 @@ class MultiCameraWidget(QWidget):
             # Restore grid
             self.fullscreen_camera = None
             self._show_grid()
+            self.fullscreen_toggled.emit(False)
         else:
             # Show only this camera
             self.fullscreen_camera = camera_index
             self._show_fullscreen(camera_index)
+            self.fullscreen_toggled.emit(True)
 
     def _show_grid(self):
         """Restore grid layout with all cameras visible."""

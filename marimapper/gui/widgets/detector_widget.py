@@ -56,7 +56,8 @@ class DetectorWidget(QWidget):
         self.video_label.mouseDoubleClickEvent = self._on_double_click
 
         # Maximize/Minimize button
-        self.maximize_button = QPushButton("⛶")  # Maximize icon
+        # Use a simple text icon to avoid font/encoding surprises across platforms
+        self.maximize_button = QPushButton("\u26F6")  # Fullscreen icon
         self.maximize_button.setToolTip("Maximize video (or double-click video)")
         self.maximize_button.setFixedSize(30, 30)
         self.maximize_button.setStyleSheet("""
@@ -77,8 +78,9 @@ class DetectorWidget(QWidget):
 
         # Position button as overlay in top-right corner
         self.maximize_button.setParent(self.video_label)
-        self.maximize_button.move(self.video_label.width() - 40, 10)
+        self._position_maximize_button()
         self.maximize_button.raise_()
+        self.maximize_button.show()
 
         self.setLayout(layout)
 
@@ -132,7 +134,7 @@ class DetectorWidget(QWidget):
         self.video_label.setPixmap(scaled_pixmap)
 
         # Reposition maximize button in top-right corner
-        self.maximize_button.move(self.video_label.width() - 40, 10)
+        self._position_maximize_button()
 
     def _toggle_maximize(self):
         """Toggle maximize/minimize state."""
@@ -140,14 +142,20 @@ class DetectorWidget(QWidget):
 
         # Update button appearance
         if self.is_maximized:
-            self.maximize_button.setText("⛶")  # Restore icon
+            self.maximize_button.setText("\u26F6")  # Restore icon
             self.maximize_button.setToolTip("Restore video (or double-click video)")
         else:
-            self.maximize_button.setText("⛶")  # Maximize icon
+            self.maximize_button.setText("\u26F6")  # Maximize icon
             self.maximize_button.setToolTip("Maximize video (or double-click video)")
 
         # Emit signal for MainWindow to handle layout changes
         self.maximize_toggled.emit(self.is_maximized)
+
+    def _position_maximize_button(self):
+        """Keep the maximize button anchored and visible even when the widget shrinks."""
+        x_pos = max(self.video_label.width() - self.maximize_button.width() - 10, 5)
+        y_pos = 5
+        self.maximize_button.move(x_pos, y_pos)
 
     def _on_double_click(self, event):
         """Handle double-click on video to toggle maximize."""

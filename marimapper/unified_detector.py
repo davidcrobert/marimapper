@@ -424,7 +424,7 @@ class UnifiedDetector(Process):
             )
 
             # Initialize camera
-            cam = Camera(device_id=self.device, axis_config=self.axis_config)
+            cam = Camera(device_name=self.device, axis_config=self.axis_config)
             logger.info(f"Camera {self.camera_id}: Connected successfully")
 
             # Start in bright/preview mode

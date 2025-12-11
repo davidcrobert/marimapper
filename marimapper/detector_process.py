@@ -252,7 +252,7 @@ class DetectorProcess(Process):
                 logger.debug("Failed to blacken backend on startup (may not support bulk off)")
 
             logger.info(f"Initializing camera (device={self._device}, axis_config={self._axis_config is not None})...")
-            cam = Camera(device_id=self._device, axis_config=self._axis_config)
+            cam = Camera(device_name=self._device, axis_config=self._axis_config)
             logger.info("Camera initialized successfully")
 
             timeout_controller = TimeoutController()

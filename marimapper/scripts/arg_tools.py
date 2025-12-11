@@ -14,16 +14,23 @@ def add_camera_args(parser):
 
     camera_options.add_argument(
         "--device",
-        type=int,
-        help="Camera device index, set to 1 if using a laptop with a USB webcam",
-        default=0,
+        type=str,
+        help="Camera device name (use --list-cameras to see available cameras). Example: '22_Cam2' on Windows, 'video0' on Linux",
+        default=None,
     )
 
     camera_options.add_argument(
         "--devices",
         type=str,
-        help="Multi-camera: Comma-separated list of USB camera device indices (e.g., '0,1,2').",
+        help="Multi-camera: Comma-separated list of camera device names (e.g., '22_Cam2,23_Cam3').",
         default=None,
+    )
+
+    camera_options.add_argument(
+        "--list-cameras",
+        action="store_true",
+        help="List all available cameras and exit",
+        default=False,
     )
 
     camera_options.add_argument(

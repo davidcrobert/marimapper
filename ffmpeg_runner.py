@@ -13,7 +13,7 @@ import cv2  # Used ONLY for display (imshow), not for capture.
 WIDTH = 1280
 HEIGHT = 720
 FPS = 30
-DEVICE_INDEX = "22_Cam2"  # '0' is usually the default webcam. On Mac/Windows this might be the device name string.
+DEVICE_INDEX = "HP True Vision FHD Camera"  # '0' is usually the default webcam. On Mac/Windows this might be the device name string.
 
 # --- Logging Setup ---
 logging.basicConfig(

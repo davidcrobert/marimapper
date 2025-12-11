@@ -29,6 +29,18 @@ def main():
 
     parse_common_args(args, logger)
 
+    # Handle --list-cameras
+    if args.list_cameras:
+        from marimapper.camera import list_available_cameras
+        cameras = list_available_cameras()
+        if len(cameras) == 0:
+            print("No cameras found")
+        else:
+            print("Available cameras:")
+            for i, cam in enumerate(cameras, 1):
+                print(f"  {i}. {cam.name}")
+        return
+
     # Build axis_config if axis-host is specified
     axis_config = None
     if args.axis_host:
@@ -40,7 +52,8 @@ def main():
             'password': args.axis_password,
         }
 
-    cam = Camera(device_id=args.device, axis_config=axis_config)
+    # Use device name (not device_id anymore)
+    cam = Camera(device_name=args.device, axis_config=axis_config)
 
     set_cam_dark(cam, args.exposure)
 

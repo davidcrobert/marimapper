@@ -39,6 +39,18 @@ def main():
 
     parse_common_args(args, logger)
 
+    # Handle --list-cameras
+    if args.list_cameras:
+        from marimapper.camera import list_available_cameras
+        cameras = list_available_cameras()
+        if len(cameras) == 0:
+            print("No cameras found")
+        else:
+            print("Available cameras:")
+            for i, cam in enumerate(cameras, 1):
+                print(f"  {i}. {cam.name}")
+        return
+
     if not os.path.isdir(args.dir):
         raise Exception(f"path {args.dir} does not exist")
 
@@ -60,11 +72,9 @@ def main():
             cfg.setdefault("password", "")
             return {"host": cfg["host"], "username": cfg["username"], "password": cfg["password"]}
         if "device" in cfg:
-            try:
-                device_idx = int(cfg["device"])
-            except Exception:
-                raise Exception("Camera config 'device' must be an integer")
-            return {"device": device_idx}
+            # Device can now be a string (device name) or integer (for compatibility)
+            device_name = str(cfg["device"])
+            return {"device": device_name}
         raise Exception("Camera config must include either 'host' (Axis) or 'device' (USB)")
 
     def _parse_json_list(raw_json: str):
@@ -105,13 +115,11 @@ def main():
         logger.info(f"Multi-camera mode: {len(camera_configs)} cameras configured from --axis-hosts")
 
     elif args.devices:
-        try:
-            device_ids = [int(d.strip()) for d in args.devices.split(',') if d.strip()]
-        except Exception:
-            raise Exception("--devices must be a comma-separated list of integers")
-        if len(device_ids) == 0:
-            raise Exception("--devices must contain at least one device index")
-        camera_configs = [{"device": d} for d in device_ids]
+        # Parse device names (strings)
+        device_names = [d.strip() for d in args.devices.split(',') if d.strip()]
+        if len(device_names) == 0:
+            raise Exception("--devices must contain at least one device name")
+        camera_configs = [{"device": d} for d in device_names]
         logger.info(f"Multi-camera mode: {len(camera_configs)} USB cameras configured from --devices")
 
     elif args.axis_host:

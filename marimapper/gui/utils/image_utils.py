@@ -92,6 +92,7 @@ def scale_qpixmap(pixmap: QPixmap, width: int, height: int) -> QPixmap:
     Returns:
         Scaled QPixmap
     """
+    # Use FastTransformation for low-latency preview (SmoothTransformation is slower)
     return pixmap.scaled(
-        width, height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        width, height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation
     )

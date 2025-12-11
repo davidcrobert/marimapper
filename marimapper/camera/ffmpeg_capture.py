@@ -219,8 +219,9 @@ class FFmpegCapture:
         with self._frame_lock:
             if self._latest_frame is None:
                 raise Exception("No frame available from background reader")
-            # Return a copy to avoid race conditions
-            return self._latest_frame.copy()
+            # Return frame directly - no copy needed for display-only use
+            # The background reader writes to a new array each time, so this is safe
+            return self._latest_frame
 
     def flush(self, count: int = 30) -> None:
         """

@@ -64,25 +64,28 @@ class StatusMonitorThread(QThread):
         while self.running:
             loop_count += 1
             try:
-                # Poll all frame queues (non-blocking)
+                # Poll all frame queues - drain to get latest frame only
                 for camera_id, frame_queue in enumerate(self.frame_queues):
-                    if frame_queue is not None and not frame_queue.empty():
+                    if frame_queue is not None:
+                        # Drain queue to get only the latest frame (reduces lag)
+                        latest_frame = None
                         try:
-                            frame = frame_queue.get_nowait()
-                            frame_count += 1
+                            while not frame_queue.empty():
+                                latest_frame = frame_queue.get_nowait()
+                                frame_count += 1
+                        except:
+                            pass
+
+                        if latest_frame is not None:
                             if frame_count <= 3:  # Log first 3 frames
                                 cam_label = f"camera {camera_id}" if self.multi_camera else "camera"
-                                self.signals.log_message.emit("info", f"Frame {frame_count} received from {cam_label}: shape={frame.shape}")
+                                self.signals.log_message.emit("info", f"Frame {frame_count} received from {cam_label}: shape={latest_frame.shape}")
 
                             # Emit appropriate signal based on mode
                             if self.multi_camera:
-                                self.signals.frame_ready_multi.emit(camera_id, frame)
+                                self.signals.frame_ready_multi.emit(camera_id, latest_frame)
                             else:
-                                self.signals.frame_ready.emit(frame)
-                        except Exception as e:
-                            if frame_count == 0:  # Only log if we haven't received any frames yet
-                                self.signals.log_message.emit("warning", f"Error getting frame from camera {camera_id}: {e}")
-                            pass  # Queue empty, ignore
+                                self.signals.frame_ready.emit(latest_frame)
 
                 # Poll detector update queue (non-blocking)
                 if not self.detector_update_queue.empty():
@@ -153,14 +156,14 @@ class StatusMonitorThread(QThread):
                         self.signals.log_message.emit("warning", f"Error reading 3D data queue: {e}")
                         pass  # Queue empty, ignore
 
-                # Periodic diagnostic log (every 3 seconds, ~90 loops at 30Hz)
-                if loop_count == 90 and frame_count == 0:
+                # Periodic diagnostic log (every 3 seconds, ~375 loops at 120Hz)
+                if loop_count == 375 and frame_count == 0:
                     queue_status = [q.empty() if q is not None else True for q in self.frame_queues]
                     self.signals.log_message.emit("warning",
                         f"No frames received yet. Queue(s) empty: {queue_status}")
 
-                # Sleep briefly to avoid busy-waiting
-                time.sleep(0.033)  # ~30 Hz polling rate
+                # Sleep briefly to avoid busy-waiting (8ms = ~120Hz for responsive UI)
+                time.sleep(0.008)
 
             except Exception as e:
                 self.signals.log_message.emit("error", f"Monitor thread error: {str(e)}")

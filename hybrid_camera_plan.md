@@ -173,28 +173,55 @@ Legacy configs get converted via `convert_legacy_config()` to the new `CameraCon
 
 ## Implementation Sequence
 
-### Phase 1: Core Abstractions (no breaking changes)
-1. Create `settings_controller.py` with `SettingsController` ABC and all three implementations
-2. Create `video_source.py` with `VideoSource` ABC and both implementations
-3. Create `camera_config.py` with JSON parsing and `CameraConfig` dataclass
+### Phase 1: Core Abstractions (no breaking changes) ✅ COMPLETED
+1. ✅ Created `settings_controller.py` with `SettingsController` ABC and all three implementations
+   - OpenCVSettingsController wraps ExposureController
+   - VAPIXSettingsController handles all VAPIX sensor params + zoom
+   - NoOpSettingsController for fixed-settings cameras
+2. ✅ Created `video_source.py` with `VideoSource` ABC and both implementations
+   - FFmpegVideoSource wraps FFmpegCapture
+   - MJPEGVideoSource wraps cv2.VideoCapture
+3. ✅ Created `camera_config.py` with JSON parsing and `CameraConfig` dataclass
+   - parse_camera_config_file() reads and validates JSON
+   - convert_legacy_config() for backwards compatibility
 
-### Phase 2: Refactor Camera Class
-4. Refactor `camera.py` to use composition (VideoSource + SettingsController)
-5. Add `from_legacy_config()` class method for backwards compatibility
-6. Add `from_config()` class method for new JSON configs
+### Phase 2: Refactor Camera Class ✅ COMPLETED
+4. ✅ Refactored `camera.py` to use composition (VideoSource + SettingsController)
+   - Removed all conditional logic (is_axis_camera, etc.)
+   - Clean separation of concerns
+5. ✅ Added `from_legacy_config()` class method for backwards compatibility
+6. ✅ Added `from_config()` class method for new JSON configs
+7. ✅ Updated all Camera instantiations in:
+   - unified_detector.py
+   - detector_process.py
+   - detector_worker_process.py
+   - check_camera_cli.py
 
-### Phase 3: CLI Integration
-7. Add `--camera-config` to `arg_tools.py`
-8. Update `scanner_cli.py` to parse config file when provided
-9. Update `gui_cli.py` similarly
+### Phase 3: CLI Integration ✅ COMPLETED
+7. ✅ Added `--camera-config` to `arg_tools.py`
+8. ✅ Updated `scanner_cli.py` to parse config file when provided
+9. ✅ Updated `gui_cli.py` to parse config file and pass to Scanner
+   - Updated main_window.py to pass camera_configs parameter
 
-### Phase 4: Scanner Integration
-10. Update `Scanner.__init__()` to accept `camera_configs: List[CameraConfig]`
-11. Update `UnifiedDetector` to accept `CameraConfig` instead of `device`/`axis_config`
+### Phase 4: Scanner Integration ✅ COMPLETED
+10. ✅ Updated `Scanner.__init__()` to accept `camera_configs: List[CameraConfig]`
+    - Added priority handling (camera_configs > axis_configs > axis_config > device)
+11. ✅ Updated `UnifiedDetector` to accept `CameraConfig` and use it
+    - Falls back to legacy device/axis_config if camera_config not provided
 
-### Phase 5: Testing
-12. Manual testing of all three camera types
-13. Test multi-camera with mixed types
+### Phase 5: Testing 🔄 READY FOR TESTING
+12. ⏳ Manual testing of all three camera types
+13. ⏳ Test multi-camera with mixed types
+
+### Bug Fixes
+
+**Multiprocessing Pickle Error Fix** ✅
+- Problem: "cannot pickle '_thread.lock' object" when passing CameraConfig to subprocess
+- Root cause: CameraConfig held VideoSource/SettingsController objects that were created in main process
+- Solution: Changed CameraConfig to store only configuration dictionaries (video_config, control_config)
+  - Added `create_video_source()` and `create_settings_controller()` methods to lazily create objects in subprocess
+  - Split creation and validation - validate early, create late
+  - Updated `Camera.from_config()` to call creation methods
 
 ---
 

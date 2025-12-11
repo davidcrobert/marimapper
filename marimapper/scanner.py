@@ -69,6 +69,7 @@ class Scanner:
         camera_model_name: str,
         axis_config: Optional[dict] = None,
         axis_configs: Optional[List[dict]] = None,
+        camera_configs: Optional[List] = None,  # List[CameraConfig] from camera_config.py
         frame_queue=None,
     ):
         """
@@ -77,6 +78,7 @@ class Scanner:
         Args:
             axis_config: Single camera config (for backwards compatibility)
             axis_configs: Multiple camera configs (for multi-camera mode)
+            camera_configs: List of CameraConfig objects (new method via JSON config file)
         """
         logger.debug("initialising scanner with unified architecture")
         # VERY important, see top of file
@@ -95,7 +97,13 @@ class Scanner:
         self.check_movement = check_movement
 
         # Determine camera configurations (normalize to list)
-        if axis_configs is not None and len(axis_configs) > 0:
+        # Priority: camera_configs (new) > axis_configs > axis_config > device
+        self.using_new_config = False
+        if camera_configs is not None and len(camera_configs) > 0:
+            # New method: CameraConfig objects
+            self.camera_configs = camera_configs
+            self.using_new_config = True
+        elif axis_configs is not None and len(axis_configs) > 0:
             self.camera_configs = axis_configs
         elif axis_config is not None:
             self.camera_configs = [axis_config]
@@ -160,8 +168,16 @@ class Scanner:
                 self.detector_frame_queues.append(detector_frame_queue)
 
             # Determine device and axis_config for this camera
-            cam_device = cam_config.get("device", device)
-            cam_axis_config = cam_config if "host" in cam_config else None
+            if self.using_new_config:
+                # CameraConfig object - will be passed directly to detector
+                cam_device = None
+                cam_axis_config = None
+                cam_camera_config = cam_config
+            else:
+                # Legacy dict config
+                cam_device = cam_config.get("device", device)
+                cam_axis_config = cam_config if "host" in cam_config else None
+                cam_camera_config = None
 
             detector = UnifiedDetector(
                 camera_id=camera_id,
@@ -173,6 +189,7 @@ class Scanner:
                 result_queue=self.coordinator.get_result_queue(),
                 display=True,
                 axis_config=cam_axis_config,
+                camera_config=cam_camera_config,
                 frame_queue=detector_frame_queue,
                 detection_timeout=1.5,
             )

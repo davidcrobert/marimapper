@@ -75,6 +75,7 @@ class ScannerInitThread(QThread):
                 camera_model_name=self.scanner_args.camera_model,
                 axis_config=self.scanner_args.axis_config,
                 axis_configs=self.scanner_args.axis_configs,
+                camera_configs=getattr(self.scanner_args, 'camera_configs', None),
                 frame_queue=self.frame_queue,
             )
 

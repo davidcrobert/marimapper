@@ -53,7 +53,7 @@ def main():
         }
 
     # Use device name (not device_id anymore)
-    cam = Camera(device_name=args.device, axis_config=axis_config)
+    cam = Camera.from_legacy_config(device_name=args.device, axis_config=axis_config)
 
     set_cam_dark(cam, args.exposure)
 

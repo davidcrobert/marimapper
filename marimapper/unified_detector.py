@@ -61,6 +61,7 @@ class UnifiedDetector(Process):
         result_queue: Queue,
         display: bool = True,
         axis_config: Optional[dict] = None,
+        camera_config=None,  # CameraConfig object from camera_config.py
         frame_queue: Optional[Queue] = None,
         detection_timeout: float = 1.5,
     ):
@@ -70,13 +71,14 @@ class UnifiedDetector(Process):
         Args:
             camera_id: Unique ID for this camera (0, 1, 2, ...)
             view_id: View ID for SFM reconstruction
-            device: Device ID for USB camera (ignored if axis_config provided)
+            device: Device ID for USB camera (ignored if axis_config or camera_config provided)
             dark_exposure: Exposure setting for dark mode
             threshold: LED detection threshold
             command_queue: Queue to receive commands from coordinator
             result_queue: Queue to send results to coordinator
             display: Whether to display camera feed
-            axis_config: Configuration for AXIS IP camera
+            axis_config: Configuration for AXIS IP camera (legacy)
+            camera_config: CameraConfig object (new method via JSON config file)
             frame_queue: Optional queue for sending frames to GUI
             detection_timeout: Max seconds to wait for detection before skipping
         """
@@ -90,6 +92,7 @@ class UnifiedDetector(Process):
         self.result_queue = result_queue
         self.display = display
         self.axis_config = axis_config
+        self.camera_config = camera_config
         self.frame_queue = frame_queue
 
         # Output queues (will be set via add_output_queue)
@@ -424,7 +427,12 @@ class UnifiedDetector(Process):
             )
 
             # Initialize camera
-            cam = Camera(device_name=self.device, axis_config=self.axis_config)
+            if self.camera_config is not None:
+                # New method: use CameraConfig object
+                cam = Camera.from_config(self.camera_config)
+            else:
+                # Legacy method: use device/axis_config
+                cam = Camera.from_legacy_config(device_name=self.device, axis_config=self.axis_config)
             logger.info(f"Camera {self.camera_id}: Connected successfully")
 
             # Start in bright/preview mode

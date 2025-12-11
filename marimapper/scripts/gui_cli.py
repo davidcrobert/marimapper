@@ -69,6 +69,7 @@ def main():
     # Build axis_config if axis-host is specified
     axis_config = None
     camera_configs = None
+    parsed_camera_configs = None  # List[CameraConfig] from new config file
 
     def _normalize_camera_cfg(cfg):
         if not isinstance(cfg, dict):
@@ -95,7 +96,18 @@ def main():
             raise Exception("Camera configs JSON must be an array")
         return [_normalize_camera_cfg(cfg) for cfg in cfgs]
 
-    if args.axis_host:
+    if args.camera_config:
+        # NEW: Parse JSON config file (highest priority)
+        from marimapper.camera.camera_config import parse_camera_config_file
+        try:
+            parsed_camera_configs = parse_camera_config_file(args.camera_config)
+            logger.info(f"Loaded {len(parsed_camera_configs)} cameras from {args.camera_config}")
+        except FileNotFoundError as e:
+            raise Exception(str(e))
+        except ValueError as e:
+            raise Exception(f"Invalid camera config file: {e}")
+
+    elif args.axis_host:
         if not args.axis_password:
             raise Exception("--axis-password is required when using --axis-host")
         axis_config = {
@@ -105,7 +117,7 @@ def main():
         }
 
     # Multi-camera configuration (Axis, USB, or mixed)
-    if args.camera_configs_json:
+    elif args.camera_configs_json:
         camera_configs = _parse_json_list(args.camera_configs_json)
 
     elif args.axis_cameras_json:
@@ -135,7 +147,9 @@ def main():
         camera_configs = [{"device": d} for d in device_names]
 
     # Validate camera count
-    if camera_configs is not None and len(camera_configs) > 9:
+    if parsed_camera_configs is not None and len(parsed_camera_configs) > 9:
+        raise Exception(f"GUI supports maximum 9 cameras (you provided {len(parsed_camera_configs)})")
+    elif camera_configs is not None and len(camera_configs) > 9:
         raise Exception(f"GUI supports maximum 9 cameras (you provided {len(camera_configs)})")
 
     # Create scanner args object that MainWindow expects
@@ -155,6 +169,7 @@ def main():
             self.camera_model = args.camera_model
             self.axis_config = axis_config
             self.axis_configs = camera_configs
+            self.camera_configs = parsed_camera_configs
 
     scanner_args = ScannerArgs()
 

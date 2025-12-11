@@ -82,6 +82,14 @@ def add_camera_args(parser):
     )
 
     camera_options.add_argument(
+        "--camera-config",
+        type=Path,
+        help="Path to JSON camera configuration file. Supports USB cameras, AXIS cameras, and hybrid "
+             "(device + VAPIX control). Overrides other camera options if specified.",
+        default=None,
+    )
+
+    camera_options.add_argument(
         "--exposure",
         type=int,
         help="Camera exposure, the lower the value, the darker the image",

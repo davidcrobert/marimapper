@@ -1,0 +1,54 @@
+[
+  {
+    "name": "TestCam1",
+    "video": {
+      "type": "device",
+      "device": "TestCam1"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.90.199",
+      "username": "root",
+      "password": "hemmer"
+    }
+  },
+  {
+    "name": "TestCam2",
+    "video": {
+      "type": "device",
+      "device": "TestCam2"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.90.198",
+      "username": "root",
+      "password": "hemmer"
+    }
+  },
+  {
+    "name": "TestCam3",
+    "video": {
+      "type": "device",
+      "device": "TestCam3"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.90.115",
+      "username": "root",
+      "password": "hemmer"
+    }
+  },
+  {
+    "name": "TestCam4",
+    "video": {
+      "type": "device",
+      "device": "TestCam4"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.90.104",
+      "username": "root",
+      "password": "hemmer"
+    }
+  }
+]

@@ -1,0 +1,40 @@
+[
+  {
+    "name": "USB Camera (OpenCV Control)",
+    "video": {
+      "type": "device",
+      "device": "22_Cam2"
+    },
+    "control": {
+      "type": "opencv"
+    }
+  },
+  {
+    "name": "Pure AXIS Camera (MJPEG Stream + VAPIX Control)",
+    "video": {
+      "type": "axis_stream",
+      "host": "192.168.1.100",
+      "username": "root",
+      "password": "your_password_here"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.168.1.100",
+      "username": "root",
+      "password": "your_password_here"
+    }
+  },
+  {
+    "name": "Hybrid AXIS Camera (Video Device + VAPIX Control)",
+    "video": {
+      "type": "device",
+      "device": "/dev/video0"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.168.1.101",
+      "username": "root",
+      "password": "your_password_here"
+    }
+  }
+]

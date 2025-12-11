@@ -27,7 +27,7 @@ class FFmpegCapture:
     maintain only the latest frame, ensuring low-latency preview on all platforms.
     """
 
-    def __init__(self, device_identifier: str, width: int = 1280, height: int = 720, fps: int = 30):
+    def __init__(self, device_identifier: str, width: int = 640, height: int = 360, fps: int = 30):
         """
         Initialize FFmpeg capture.
 

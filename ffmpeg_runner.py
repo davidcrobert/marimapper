@@ -10,8 +10,8 @@ import cv2  # Used ONLY for display (imshow), not for capture.
 # --- Configuration ---
 # Set the resolution to match your camera's hardware capabilities.
 # Mismatched resolutions are a common cause of FFmpeg errors.
-WIDTH = 1280
-HEIGHT = 720
+WIDTH = 640
+HEIGHT = 360
 FPS = 30
 DEVICE_INDEX = "HP True Vision FHD Camera"  # '0' is usually the default webcam. On Mac/Windows this might be the device name string.
 

@@ -81,19 +81,17 @@ def find_led_in_image(
 
 
 def draw_led_detections(image: cv2.Mat, led_detection: Optional[Point2D]) -> np.ndarray:
-    render_image = (
-        image if len(image.shape) == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    )
+    # Make a writable BGR image (cv2 drawing ops require writeable contiguous memory)
+    if len(image.shape) == 3:
+        render_image = np.ascontiguousarray(image.copy())
+    else:
+        render_image = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
 
     if led_detection is None:
         return render_image
 
     img_height = render_image.shape[0]
     img_width = render_image.shape[1]
-
-    cv2.drawContours(
-        render_image, led_detection.contours, -1, (255, 0, 0), 1
-    )  # TODO, de-normalise contours once normalised
 
     u_abs = int(led_detection.u() * img_width)
 

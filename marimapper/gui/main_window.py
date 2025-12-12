@@ -336,6 +336,7 @@ class MainWindow(QMainWindow):
         self.signals.frame_ready.connect(self.detector_widget.update_frame)
         self.signals.frame_ready_multi.connect(self.on_frame_ready_multi)
         self.signals.log_message.connect(self.log_widget.add_message)
+        self.signals.led_detected.connect(self.on_led_detected)
         self.signals.led_detected.connect(self.on_led_progress)
         self.signals.led_skipped.connect(self.on_led_progress)
         self.signals.scan_completed.connect(self.on_scan_completed)
@@ -1033,6 +1034,66 @@ class MainWindow(QMainWindow):
             self.scan_progress_bar.setRange(0, 1)
             self.scan_progress_bar.setValue(0)
             self.scan_progress_bar.setFormat("0/0")
+
+    def _camera_index_from_view(self, view_id: Optional[int]) -> Optional[int]:
+        """Map view_id back to camera index for overlay routing."""
+        if self.scanner is None or view_id is None:
+            return None
+
+        try:
+            base_view = getattr(self.scanner, "current_view", None)
+            if base_view is None:
+                return None
+            camera_idx = int(view_id) - int(base_view)
+            if 0 <= camera_idx < self.camera_count:
+                return camera_idx
+        except Exception:
+            return None
+        return None
+
+    @pyqtSlot(object)
+    def on_led_detected(self, data):
+        """Render detection marker on the correct camera preview."""
+        # Extract normalized coordinates
+        point = getattr(data, "point", None)
+        if point is None and isinstance(data, dict):
+            point = data.get("point") or data.get("position")
+
+        u = v = None
+        if point is not None:
+            if hasattr(point, "u") and hasattr(point, "v"):
+                u, v = point.u(), point.v()
+            elif isinstance(point, dict):
+                u = point.get("u")
+                v = point.get("v")
+            elif isinstance(point, (tuple, list)) and len(point) >= 2:
+                u, v = point[0], point[1]
+        else:
+            u = getattr(data, "u", None)
+            v = getattr(data, "v", None)
+
+        try:
+            u = float(u)
+            v = float(v)
+        except Exception:
+            return
+
+        # Determine which camera to update
+        if self.camera_count > 1:
+            view_id = getattr(data, "view_id", None)
+            if isinstance(data, dict):
+                view_id = data.get("view_id", view_id)
+            camera_index = self._camera_index_from_view(view_id)
+            if camera_index is None:
+                camera_index = self.active_camera_index
+        else:
+            camera_index = 0
+
+        persist_seconds = 1.2
+        if self.multi_camera_widget is not None:
+            self.multi_camera_widget.set_detection_marker(camera_index, u, v, persist_seconds)
+        elif self.detector_widget is not None:
+            self.detector_widget.set_detection_marker(u, v, persist_seconds)
 
     @pyqtSlot(int)
     @pyqtSlot(object)

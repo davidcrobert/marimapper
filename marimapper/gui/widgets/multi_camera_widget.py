@@ -185,6 +185,12 @@ class MultiCameraWidget(QWidget):
             return
         self.detector_widgets[camera_index].update_frame(frame)
 
+    def set_detection_marker(self, camera_index: int, u: float, v: float, persist_seconds: float = 1.2):
+        """Forward detection marker to the correct camera widget."""
+        if camera_index < 0 or camera_index >= len(self.detector_widgets):
+            return
+        self.detector_widgets[camera_index].set_detection_marker(u, v, persist_seconds)
+
     def toggle_fullscreen(self, camera_index: int):
         """
         Toggle fullscreen for specific camera.

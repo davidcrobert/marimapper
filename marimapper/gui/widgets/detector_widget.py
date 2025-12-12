@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal, QPoint
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QImage
 import cv2
+from time import monotonic
 
 from marimapper.gui.utils.image_utils import numpy_to_qpixmap, scale_qpixmap
 
@@ -33,7 +34,9 @@ class DetectorWidget(QWidget):
         self.mask_overlay = None  # QPixmap with alpha for display
         self.last_paint_point = None  # For smooth line drawing
         self.show_mask = True  # Toggle mask visibility
-        self.base_frame = None  # Store base video frame
+        self.base_frame = None  # Store latest video frame (QPixmap, unscaled)
+        self.detection_point = None  # Normalized (u, v) of last detection
+        self.detection_expire_time = 0.0  # monotonic timestamp for marker expiry
 
         self.init_ui()
 
@@ -96,19 +99,25 @@ class DetectorWidget(QWidget):
             return
 
         # Convert numpy array to QPixmap
-        pixmap = numpy_to_qpixmap(frame)
+        self.base_frame = numpy_to_qpixmap(frame)
 
-        # Scale to fit the label while maintaining aspect ratio
+        # Render with overlays
+        self._render_current_frame()
+
+    def _render_current_frame(self):
+        """Render the current frame with detection + mask overlays."""
+        if self.base_frame is None or self.base_frame.isNull():
+            return
+
+        # Scale base frame to current label size
         scaled_pixmap = scale_qpixmap(
-            pixmap, self.video_label.width(), self.video_label.height()
+            self.base_frame, self.video_label.width(), self.video_label.height()
         )
 
-        # Store base frame
-        self.base_frame = scaled_pixmap
+        result = scaled_pixmap.copy()
 
         # Apply mask overlay if visible
         if self.show_mask and self.mask_overlay is not None:
-            result = scaled_pixmap.copy()
             painter = QPainter(result)
             scaled_overlay = self.mask_overlay.scaled(
                 result.size(),
@@ -117,21 +126,24 @@ class DetectorWidget(QWidget):
             )
             painter.drawPixmap(0, 0, scaled_overlay)
             painter.end()
-            self.video_label.setPixmap(result)
-        else:
-            self.video_label.setPixmap(scaled_pixmap)
+
+        # Draw detection marker after mask so it stays visible
+        if self.detection_point is not None:
+            # Expire marker after timeout
+            if self.detection_expire_time and monotonic() > self.detection_expire_time:
+                self.detection_point = None
+                self.detection_expire_time = 0.0
+            else:
+                self._draw_detection_marker(result, self.detection_point)
+
+        self.video_label.setPixmap(result)
 
     def resizeEvent(self, event):
         """Handle widget resize events to scale the video feed."""
         super().resizeEvent(event)
-        # Re-scale the current frame if one is displayed
-        if not self.video_label.pixmap() or self.video_label.pixmap().isNull():
-            return
 
-        scaled_pixmap = scale_qpixmap(
-            self.video_label.pixmap(), self.video_label.width(), self.video_label.height()
-        )
-        self.video_label.setPixmap(scaled_pixmap)
+        # Re-render current frame to fit new size
+        self._render_current_frame()
 
         # Reposition maximize button in top-right corner
         self._position_maximize_button()
@@ -160,6 +172,56 @@ class DetectorWidget(QWidget):
     def _on_double_click(self, event):
         """Handle double-click on video to toggle maximize."""
         self._toggle_maximize()
+
+    def _draw_detection_marker(self, pixmap: QPixmap, detection_point: tuple[float, float]):
+        """Overlay a crosshair at the detected LED location."""
+        u, v = detection_point
+
+        width = pixmap.width()
+        height = pixmap.height()
+        if width <= 0 or height <= 0:
+            return
+
+        # Match detector normalization logic (v is normalized to image width with offset)
+        v_offset = (width - height) / 2.0
+        x = int(u * width)
+        y = int(v * width - v_offset)
+
+        # Clamp to pixmap bounds
+        x = max(0, min(width - 1, x))
+        y = max(0, min(height - 1, y))
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        pen = QPen(QColor(0, 255, 0))
+        pen.setWidth(3)
+        painter.setPen(pen)
+
+        # Crosshair + ring for visibility
+        cross_radius = max(8, min(width, height) // 20)
+        ring_radius = cross_radius + 6
+        painter.drawLine(x - cross_radius, y, x + cross_radius, y)
+        painter.drawLine(x, y - cross_radius, x, y + cross_radius)
+        painter.drawEllipse(QPoint(x, y), ring_radius, ring_radius)
+        painter.end()
+
+    def set_detection_marker(self, u: float, v: float, persist_seconds: float = 1.2):
+        """Set normalized detection location and refresh display."""
+        try:
+            self.detection_point = (float(u), float(v))
+            self.detection_expire_time = monotonic() + max(0.0, persist_seconds)
+        except Exception:
+            self.detection_point = None
+            self.detection_expire_time = 0.0
+            return
+        self._render_current_frame()
+
+    def clear_detection_marker(self):
+        """Clear any detection marker overlay."""
+        self.detection_point = None
+        self.detection_expire_time = 0.0
+        self._render_current_frame()
 
     def mousePressEvent(self, event):
         """Handle mouse press for painting."""
@@ -273,23 +335,7 @@ class DetectorWidget(QWidget):
         """Redraw video frame with mask overlay."""
         if self.base_frame is None:
             return
-
-        # Get current video frame
-        base_pixmap = self.base_frame.copy()
-
-        # Composite mask overlay if visible
-        if self.show_mask and self.mask_overlay is not None:
-            painter = QPainter(base_pixmap)
-            # Scale overlay to match current video size if needed
-            scaled_overlay = self.mask_overlay.scaled(
-                base_pixmap.size(),
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            painter.drawPixmap(0, 0, scaled_overlay)
-            painter.end()
-
-        self.video_label.setPixmap(base_pixmap)
+        self._render_current_frame()
 
     def get_mask_as_numpy(self):
         """Convert mask overlay to binary numpy array (0=ignore, 255=detect)."""

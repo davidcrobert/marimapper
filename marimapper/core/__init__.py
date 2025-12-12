@@ -22,6 +22,15 @@ from .events import (
     DetectionEvent,
     ReconstructionEvent,
 )
+from .config import (
+    CameraVideoConfig,
+    CameraControlConfig,
+    CameraConfig,
+    BackendConfig,
+    ScannerConfig,
+    MariMapperConfig,
+    config_from_argparse,
+)
 
 __all__ = [
     "Vec2",
@@ -37,4 +46,11 @@ __all__ = [
     "DetectionCommand",
     "DetectionEvent",
     "ReconstructionEvent",
+    "CameraVideoConfig",
+    "CameraControlConfig",
+    "CameraConfig",
+    "BackendConfig",
+    "ScannerConfig",
+    "MariMapperConfig",
+    "config_from_argparse",
 ]

@@ -2,6 +2,7 @@
 
 ## Goals and guardrails
 - Make package boundaries obvious (hardware vs detection vs reconstruction vs UI) so a junior dev can follow data flow without cross-referencing multiple files.
+- Rewrite code to be as readable as possible and follow clear patterns, flows, and architecture.
 - Reduce duplication (multiple detector/coordinator variants) and side effects; favor small, testable units with typed inputs and outputs.
 - Keep the GUI thin: UI code should bind to view models or services rather than owning business logic or multiprocessing.
 - Maintain CLI/GUI compatibility during the transition via shims and deprecation warnings.
@@ -60,15 +61,48 @@ Add `marimapper/compat/` shims (re-export old names) during migration.
 
 ## Phased refactor plan
 
-1) **Baseline and hygiene**
-   - [ ] Remove committed `__pycache__` and add ignore rules; ensure `pyproject.toml` exports only the new package paths.
+1) **Baseline and hygiene** ✓ COMPLETE
+   - [x] Remove committed `__pycache__` and add ignore rules; ensure `pyproject.toml` exports only the new package paths.
+     - __pycache__/ already in .gitignore, no committed pycache files found
+     - pyproject.toml already points to correct script paths
    - [x] Add an `architecture.md` stub and module docstrings describing responsibilities.
-   - [x] Introduce `marimapper/core` with minimal `models.py` and `events.py`; migrate common type aliases from scattered files (initial skeleton added; migration pending).
+     - docs/architecture.md created with high-level flow and package boundaries
+   - [x] Introduce `marimapper/core` with minimal `models.py` and `events.py`; migrate common type aliases from scattered files.
+     - marimapper/core/ created with models.py (dataclasses for LED, Camera, Detection, Scan, Reconstruction)
+     - marimapper/core/events.py created with PipelineStage, DetectionCommand, and event dataclasses
+     - marimapper/core/__init__.py exports all public types
 
-2) **Config unification**
-   - Centralize configuration parsing in `core/config.py` using dataclasses or pydantic-style validation.
-   - Make CLI (`scripts/arg_tools.py` and friends) and GUI share this config loader; deprecate ad-hoc JSON parsing.
-   - Encode camera and backend configs via the new `camera_config` objects; provide a migration guide for legacy CLI flags.
+2) **Config unification** ← IN PROGRESS
+   - [x] Create `core/config.py` with unified configuration dataclasses
+     - CameraVideoConfig, CameraControlConfig, CameraConfig (replaces camera/camera_config.py)
+     - BackendConfig (consolidates backend type + args dict)
+     - ScannerConfig (LED range, interpolation, thresholds, movement check, camera model)
+     - MariMapperConfig (top-level: cameras list, backend, scanner)
+     - All dataclasses have to_dict()/from_dict() for JSON serialization
+     - Legacy converters: from_legacy_axis(), from_legacy_usb()
+   - [x] Add config loader that supports both JSON files and argparse Namespace conversion
+     - MariMapperConfig.from_json() / to_json() for file-based config
+     - config_from_argparse() for CLI argparse.Namespace -> MariMapperConfig
+   - [ ] Update CLI to use core/config.py instead of ad-hoc arg_tools
+     - Requires: Extract backend-specific args from argparse properly
+     - Decision: Defer to full CLI migration (Phase 8)
+   - [ ] Update GUI to use core/config.py instead of scanner_args_serializer
+     - Can start using MariMapperConfig for project save/load
+     - Old scanner_args_serializer can be deprecated gradually
+   - [x] Add migration helper for legacy CLI flags -> new config format
+     - config_from_argparse() handles --axis-host, --device, --axis-hosts, --devices, etc.
+
+   **Completed:**
+   - Created core/config.py with all dataclasses
+   - Exported from core/__init__.py
+   - JSON serialization/deserialization working
+   - Legacy arg conversion for camera configs working
+
+   **Next steps:**
+   - Document config file format in docs/
+   - Add example config files
+   - Start using in GUI for project persistence
+   - Full CLI migration deferred to Phase 8
 
 3) **Hardware layer consolidation**
    - Move `camera/` into `hardware/camera/` and make it the sole camera API; delete or alias legacy camera helpers once migrated.

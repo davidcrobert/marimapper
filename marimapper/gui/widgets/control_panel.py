@@ -29,6 +29,7 @@ class ControlPanel(QWidget):
     threshold_changed = pyqtSignal(int)  # New threshold value (0-255)
     all_off_requested = pyqtSignal()  # Turn all LEDs off
     all_on_requested = pyqtSignal()  # Turn all LEDs on
+    apply_config_requested = pyqtSignal()  # Apply AXIS camera config from file
     # Mask control signals
     paint_mode_toggled = pyqtSignal(bool)  # Enable/disable painting
     brush_size_changed = pyqtSignal(int)  # Brush size value
@@ -134,6 +135,12 @@ class ControlPanel(QWidget):
         led_power_layout.addWidget(self.all_on_button)
 
         camera_controls_layout.addLayout(led_power_layout)
+
+        # Apply config button
+        self.apply_config_button = QPushButton("Apply Config File")
+        self.apply_config_button.setToolTip("Apply all camera settings from axis_config_saved.txt")
+        self.apply_config_button.clicked.connect(self.on_apply_config)
+        camera_controls_layout.addWidget(self.apply_config_button)
 
         self.exposure_status_label = QLabel("Mode: Normal")
         camera_controls_layout.addWidget(self.exposure_status_label)
@@ -354,6 +361,10 @@ class ControlPanel(QWidget):
     def on_all_on(self):
         """Handle All On button click."""
         self.all_on_requested.emit()
+
+    def on_apply_config(self):
+        """Handle Apply Config button click."""
+        self.apply_config_requested.emit()
 
     def on_paint_mode_toggled(self, checked: bool):
         """Handle paint mode button toggle."""

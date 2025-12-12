@@ -310,6 +310,7 @@ class MainWindow(QMainWindow):
         self.control_panel.threshold_changed.connect(self.set_threshold)
         self.control_panel.all_off_requested.connect(self.set_all_off)
         self.control_panel.all_on_requested.connect(self.set_all_on)
+        self.control_panel.apply_config_requested.connect(self.apply_axis_config)
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
@@ -1139,6 +1140,27 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("LEDs: All on")
         except Exception as e:
             self.log_widget.log_error(f"Failed to turn LEDs on: {str(e)}")
+
+    @pyqtSlot()
+    def apply_axis_config(self):
+        """Apply AXIS camera settings from config file to all AXIS cameras."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            # Send APPLY_CONFIG command to all detectors
+            # Only VAPIX-based cameras will apply settings
+            for i in range(self.camera_count):
+                detector_queue = self.scanner.get_detector_command_queue(i)
+                if detector_queue is not None:
+                    detector_queue.put(("APPLY_CONFIG",))
+
+            cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
+            self.log_widget.log_info(f"Applying config file to all AXIS {cameras_msg}...")
+            self.statusBar().showMessage("Applying AXIS config file...")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to apply config: {str(e)}")
 
     @pyqtSlot(int)
     def on_visualizer_led_clicked(self, led_id: int):

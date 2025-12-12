@@ -408,6 +408,24 @@ class UnifiedDetector(Process):
             self.threshold = new_threshold
             logger.info(f"Camera {self.camera_id}: Threshold set to {new_threshold}")
 
+        # APPLY_CONFIG: Apply settings from config file (AXIS cameras only)
+        elif command_type == "APPLY_CONFIG":
+            try:
+                # Only apply if this is a VAPIX camera
+                from marimapper.camera.settings_controller import VAPIXSettingsController
+                if isinstance(cam._settings_controller, VAPIXSettingsController):
+                    # Apply config from default location
+                    success = cam._settings_controller.apply_config()
+                    if success:
+                        logger.info(f"Camera {self.camera_id}: Applied config file successfully")
+                    else:
+                        logger.warning(f"Camera {self.camera_id}: Some config settings failed to apply")
+                    cam.eat()  # Flush buffered frames after settings change
+                else:
+                    logger.debug(f"Camera {self.camera_id}: Not an AXIS camera, ignoring APPLY_CONFIG")
+            except Exception as e:
+                logger.error(f"Camera {self.camera_id}: Failed to apply config: {e}")
+
         # EXIT: Shutdown
         elif command_type == "EXIT":
             logger.info(f"Camera {self.camera_id}: Received EXIT command")

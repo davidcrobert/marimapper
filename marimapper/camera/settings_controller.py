@@ -63,6 +63,7 @@ class VAPIXSettingsController(SettingsController):
         "ImageSource.I0.Sensor.WDR",
         "ImageSource.I0.Sensor.WhiteBalance",
         "ImageSource.I0.Sensor.LowLatencyMode",
+        "ImageSource.I0.Sensor.CaptureMode",
     }
 
     def __init__(self, host: str, username: str = "root", password: str = ""):
@@ -151,6 +152,85 @@ class VAPIXSettingsController(SettingsController):
 
         logger.debug(f"Captured {len(self.default_settings)} VAPIX settings as defaults")
         return True
+
+    def apply_config(self, config_path: str = "axis_config_saved.txt") -> bool:
+        """
+        Apply all whitelisted parameters + zoom from a config file.
+
+        Also updates the default_settings so that Bright Mode preserves these settings.
+
+        Args:
+            config_path: Path to the config file (default: "axis_config_saved.txt")
+
+        Returns:
+            True if all settings were applied successfully, False otherwise
+        """
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_lines = f.read().splitlines()
+        except OSError as exc:
+            logger.error(f"Failed to read config {config_path}: {exc}")
+            return False
+
+        applied = 0
+        failed = 0
+        zoom_val = None
+        applied_settings = {}  # Track successfully applied settings
+
+        for line in config_lines:
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if not key:
+                continue
+
+            # Remove "root." prefix if present
+            if key.startswith("root."):
+                key = key[5:]
+
+            # Handle zoom separately
+            if key in ("ptz.zoom", "zoom"):
+                try:
+                    zoom_val = str(int(round(float(val))))
+                except ValueError:
+                    zoom_val = val
+                continue
+
+            # Apply whitelisted parameters
+            if key not in self.SENSOR_PARAMS:
+                continue
+
+            if self._set_param(key, val):
+                applied += 1
+                applied_settings[key] = val
+                logger.debug(f"Applied {key}={val}")
+            else:
+                failed += 1
+                logger.warning(f"Failed to apply {key}={val}")
+
+        # Apply zoom if present in config
+        if zoom_val is not None:
+            if self._set_zoom(zoom_val):
+                applied += 1
+                logger.debug(f"Applied zoom={zoom_val}")
+                # Update default_zoom so Bright Mode preserves it
+                self.default_zoom = zoom_val
+            else:
+                failed += 1
+                logger.warning(f"Failed to apply zoom={zoom_val}")
+
+        # Update default_settings with successfully applied settings
+        # so that Bright Mode will restore to these values instead of original defaults
+        if applied_settings:
+            if self.default_settings is None:
+                self.default_settings = {}
+            self.default_settings.update(applied_settings)
+            logger.debug(f"Updated default_settings with {len(applied_settings)} config values")
+
+        logger.info(f"Applied {applied} params, failed {failed} from {config_path}")
+        return failed == 0
 
     def _set_iris(self, position: int) -> bool:
         """Set iris position (0=open, 100=closed)."""

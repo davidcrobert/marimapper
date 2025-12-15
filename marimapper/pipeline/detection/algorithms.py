@@ -118,15 +118,22 @@ def find_led_in_image(
     return Point2D(center_u, center_v, contours)
 
 
-def draw_led_detections(image: cv2.Mat, led_detection: Optional[Point2D]) -> np.ndarray:
+def draw_led_detections(
+    image: cv2.Mat,
+    led_detection: Optional[Point2D],
+    color: tuple = (0, 255, 0),
+    marker_size: int = 100
+) -> np.ndarray:
     """
     Draw LED detection overlay on image.
 
-    Renders a green marker at the detected LED position.
+    Renders a marker at the detected LED position.
 
     Args:
         image: Input image (grayscale or BGR)
         led_detection: Detected LED position (or None)
+        color: BGR color tuple for the marker (default: green)
+        marker_size: Size of the marker in pixels (default: 100)
 
     Returns:
         BGR image with detection marker drawn (if detection provided)
@@ -149,12 +156,26 @@ def draw_led_detections(image: cv2.Mat, led_detection: Optional[Point2D]) -> np.
     v_offset = (img_width - img_height) / 2.0
     v_abs = int(led_detection.v() * img_width - v_offset)
 
-    # Draw green marker at LED position
+    # Draw marker at LED position
     cv2.drawMarker(
         render_image,
         (u_abs, v_abs),
-        (0, 255, 0),
-        markerSize=100,
+        color,
+        markerSize=marker_size,
     )
 
     return render_image
+
+
+def draw_error_detection(image: cv2.Mat, led_detection: Optional[Point2D]) -> np.ndarray:
+    """
+    Draw LED detection overlay in red (for errors like darkness check failures).
+
+    Args:
+        image: Input image (grayscale or BGR)
+        led_detection: Detected LED position (or None)
+
+    Returns:
+        BGR image with RED detection marker drawn (if detection provided)
+    """
+    return draw_led_detections(image, led_detection, color=(0, 0, 255), marker_size=120)

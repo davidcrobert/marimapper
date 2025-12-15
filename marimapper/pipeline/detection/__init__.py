@@ -20,6 +20,7 @@ Usage:
 from .algorithms import (
     find_led_in_image,
     draw_led_detections,
+    draw_error_detection,
     contour_brightness,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     # Algorithms
     "find_led_in_image",
     "draw_led_detections",
+    "draw_error_detection",
     "contour_brightness",
     # Camera control
     "set_cam_dark",

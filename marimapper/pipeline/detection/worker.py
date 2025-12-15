@@ -31,7 +31,7 @@ from marimapper.led import LED2D, Point2D
 from marimapper.queues import Queue2D, DetectionControlEnum
 from marimapper.timeout_controller import TimeoutController
 
-from .algorithms import find_led_in_image, draw_led_detections
+from .algorithms import find_led_in_image, draw_led_detections, draw_error_detection
 from .camera_control import set_cam_dark, set_cam_default
 from .commands import DetectionCommand, DetectionResult, create_result
 
@@ -217,16 +217,56 @@ class DetectionWorker(Process):
             image, self.threshold, self._mask, self._mask_resolution
         )
 
-        # Show frame for debugging
-        self._show_frame(cam, led_detection)
-
         if led_detection is not None:
+            # LED visible when all should be off - this is an error!
             logger.error(
-                f"Camera {self.camera_id}: Darkness check FAILED - LED visible when all should be off"
+                f"Camera {self.camera_id}: Darkness check FAILED - "
+                f"LED visible at position ({led_detection.u():.3f}, {led_detection.v():.3f}) "
+                f"when all should be off"
             )
+
+            # Show the false positive LED with RED marker to help user identify the issue
+            if self.display:
+                rendered_frame = draw_error_detection(image, led_detection)
+
+                # Send to GUI or display
+                if self.frame_queue is not None:
+                    try:
+                        # Clear queue and send error frame
+                        while not self.frame_queue.empty():
+                            try:
+                                self.frame_queue.get_nowait()
+                            except:
+                                break
+                        self.frame_queue.put_nowait(rendered_frame)
+                    except:
+                        pass
+                else:
+                    # CLI mode - show window
+                    if not self._window_initialized:
+                        cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                        self._window_initialized = True
+                    cv2.imshow(self._window_name, rendered_frame)
+                    cv2.waitKey(1)
+
+                # Keep the error frame visible for a moment
+                time.sleep(2.0)  # 2 seconds to see the red marker
+
+                # Continue showing the error frame
+                for _ in range(10):  # Show for ~1 more second
+                    if self.frame_queue is not None:
+                        try:
+                            self.frame_queue.put_nowait(rendered_frame)
+                        except:
+                            pass
+                    time.sleep(0.1)
+
             return False
 
+        # No LED detected - darkness check passed
         logger.debug(f"Camera {self.camera_id}: Darkness check PASSED")
+        # Show normal frame
+        self._show_frame(cam, led_detection)
         return True
 
     def _detect_led(self, cam: Camera, led_id: int) -> tuple[bool, Optional[Point2D]]:

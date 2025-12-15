@@ -208,6 +208,21 @@ Add `marimapper/compat/` shims (re-export old names) during migration.
      - Files modified: unified_coordinator.py (+82 lines), scanner.py (+14 lines), gui/main_window.py (4 locations)
      - All changes compile successfully ✓
 
+   **Enhancement (Post-Phase 4):**
+   - [x] Added visual feedback for darkness check failures
+     - Issue: When scan aborts due to "LED visible when all should be off", user couldn't see WHERE the false positive was
+     - Solution:
+       - Added `draw_error_detection()` function in algorithms.py - draws LED marker in RED (vs green for normal)
+       - Modified `_check_darkness()` in worker.py to:
+         - Use red marker when LED detected during darkness check
+         - Log exact position coordinates in error message
+         - Display error frame for 3 seconds (2s initial + 1s repeated frames) so user can see it
+         - Clear frame queue and prioritize error frame display
+       - Enhanced error message: "LED visible at position (0.123, 0.456) when all should be off"
+     - User experience: When darkness check fails, camera widget shows RED marker at false positive location for 3 seconds
+     - Files modified: pipeline/detection/algorithms.py (+13 lines), pipeline/detection/__init__.py, pipeline/detection/worker.py (+48 lines)
+     - All changes compile successfully ✓
+
 5) **Scanning and coordinator layer**
    - Move `scanner.py`, `unified_coordinator.py`, `queues.py`, and `timeout_controller.py` into `pipeline/scanning/`.
    - Introduce a reusable `ProcessService` base (start, stop, join with timeouts) and a lightweight scheduler orchestrating detectors and backend.

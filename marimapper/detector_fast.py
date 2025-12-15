@@ -1,11 +1,29 @@
 """
+DEPRECATED: Fast detector variant (experimental, not recommended).
+
+Original note:
 I've left this file in here unused because, well, it kind of works but I can't in good consciousness
 offer it as an option as even I can't get much use out of it.
 It works in ideal scenarios but little else beside.
 If it works, then it would reduce the complexity from O(n) to O(logn) which is insane.
 Howeverrrr, it's not great, even in ideal environments.
 Keep it simple, keep it reliable.
+
+---
+
+This module is deprecated and not recommended for use.
+Use marimapper.pipeline.detection.DetectionWorker instead.
 """
+
+import warnings
+
+warnings.warn(
+    "marimapper.detector_fast is deprecated and experimental. "
+    "Use 'marimapper.pipeline.detection.DetectionWorker' instead. "
+    "This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from marimapper.camera import Camera
 from marimapper.detector import show_image

@@ -2,6 +2,7 @@ import cv2
 from datetime import datetime
 import requests
 from requests.auth import HTTPDigestAuth
+from concurrent.futures import ThreadPoolExecutor
 
 CAMERA_HOST = "192.170.90.199"
 USERNAME = "root"
@@ -238,6 +239,17 @@ def main():
     # Axis MJPEG endpoint; credentials in URL for basic auth
     stream_url = f"http://{USERNAME}:{PASSWORD}@{CAMERA_HOST}/axis-cgi/mjpg/video.cgi"
 
+    # Offload control requests so the UI/render loop never blocks on HTTP.
+    control_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="axis-ctl")
+
+    def submit_control(fn, *args):
+        def _wrapper():
+            try:
+                fn(*args)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[CTRL] {fn.__name__} failed: {exc}")
+        control_executor.submit(_wrapper)
+
     cap = cv2.VideoCapture(stream_url)
     if not cap.isOpened():
         raise SystemExit(f"Failed to open stream: {stream_url}")
@@ -260,22 +272,23 @@ def main():
             if key == ord("q") or cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                 break
             if key == ord("p"):
-                list_aperture_settings()
+                submit_control(list_aperture_settings)
             if key == ord("i"):
-                set_dc_iris_enabled(False)
+                submit_control(set_dc_iris_enabled, False)
             if key == ord("o"):
-                set_dc_iris_enabled(True)
+                submit_control(set_dc_iris_enabled, True)
             if key == ord("]"):
-                nudge_dc_iris(+5)
+                submit_control(nudge_dc_iris, +5)
             if key == ord("["):
-                nudge_dc_iris(-5)
+                submit_control(nudge_dc_iris, -5)
             if key == ord("s"):
-                save_camera_config()
+                submit_control(save_camera_config)
             if key == ord("l"):
-                apply_camera_config()
+                submit_control(apply_camera_config)
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        control_executor.shutdown(wait=False)
 
 if __name__ == "__main__":
     main()

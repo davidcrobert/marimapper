@@ -1,6 +1,18 @@
 """
-DetectorWorkerProcess - Individual camera worker for multi-camera scanning.
+DEPRECATED: DetectorWorkerProcess - Individual camera worker for multi-camera scanning.
 
+This module is deprecated and has been replaced by the unified detection architecture.
+
+New code should use:
+- marimapper.pipeline.detection.DetectionWorker for detection processes
+- marimapper.unified_coordinator.UnifiedCoordinator for coordination
+
+This file is maintained for backwards compatibility only and will be removed
+in a future version.
+
+---
+
+Old description:
 This process handles a single camera in a multi-camera setup:
 1. Captures images from assigned camera
 2. Detects LED positions when commanded by CoordinatorProcess
@@ -10,6 +22,16 @@ This process handles a single camera in a multi-camera setup:
 Unlike DetectorProcess, this worker does NOT control the LED backend -
 that's handled by the CoordinatorProcess for synchronization.
 """
+
+import warnings
+
+warnings.warn(
+    "marimapper.detector_worker_process is deprecated. "
+    "Use 'marimapper.pipeline.detection.DetectionWorker' instead. "
+    "This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from multiprocessing import Process, Queue, get_logger
 import time

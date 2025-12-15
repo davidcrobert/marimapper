@@ -1,3 +1,27 @@
+"""
+DEPRECATED: This module is deprecated.
+
+detector_process.py is an old implementation for single-camera detection.
+It has been replaced by the unified detection architecture.
+
+New code should use:
+- marimapper.pipeline.detection.DetectionWorker for detection processes
+- marimapper.unified_coordinator.UnifiedCoordinator for coordination
+
+This file is maintained for backwards compatibility only and will be removed
+in a future version.
+"""
+
+import warnings
+
+warnings.warn(
+    "marimapper.detector_process is deprecated. "
+    "Use 'marimapper.pipeline.detection.DetectionWorker' instead. "
+    "This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from multiprocessing import get_logger, Process, Queue, Event
 import time
 from enum import Enum

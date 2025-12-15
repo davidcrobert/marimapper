@@ -20,6 +20,8 @@ Architecture:
 """
 
 from multiprocessing import Process, Queue, get_logger
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import time
 import queue
 from typing import Optional, List
@@ -90,6 +92,9 @@ class DetectionWorker(Process):
         self.axis_config = axis_config
         self.camera_config = camera_config
         self.frame_queue = frame_queue
+        # Lazily created in run() to avoid pickling issues on spawn
+        self._control_executor = None
+        self._camera_lock = None
 
         # Output queues (will be set via add_output_queue)
         self._output_queues: List[Queue2D] = []
@@ -150,6 +155,80 @@ class DetectionWorker(Process):
             except Exception as e:
                 logger.warning(f"Camera {self.camera_id}: Failed to send to output queue: {e}")
 
+    # --- Control helpers (run on background executor to keep preview responsive) ---
+
+    def _submit_control_task(self, label: str, func) -> None:
+        """
+        Run a camera-control operation in the background to avoid blocking the preview loop.
+
+        Args:
+            label: Description for logging
+            func: Callable to execute
+        """
+        if self._control_executor is None:
+            logger.warning(f"Camera {self.camera_id}: Control executor not ready; running '{label}' inline")
+            try:
+                func()
+            except Exception as exc:
+                logger.warning(f"Camera {self.camera_id}: {label} failed: {exc}")
+            return
+
+        def _wrapped():
+            try:
+                func()
+            except Exception as exc:
+                logger.warning(f"Camera {self.camera_id}: {label} failed: {exc}")
+        try:
+            self._control_executor.submit(_wrapped)
+        except Exception as exc:
+            logger.warning(f"Camera {self.camera_id}: Failed to submit control task '{label}': {exc}")
+
+    def _set_dark_mode_blocking(self, cam: Camera) -> None:
+        """Switch to dark mode (blocking; safe to call from control executor)."""
+        with self._camera_lock:
+            set_cam_dark(cam, self.dark_exposure)
+            cam.eat()
+            self._in_dark_mode = True
+            logger.info(f"Camera {self.camera_id}: Set to DARK mode")
+
+    def _set_bright_mode_blocking(self, cam: Camera) -> None:
+        """Switch to bright/preview mode (blocking; safe to call from control executor)."""
+        with self._camera_lock:
+            set_cam_default(cam)
+            cam.eat()
+            self._in_dark_mode = False
+            logger.info(f"Camera {self.camera_id}: Set to BRIGHT mode")
+
+    def _reset_preview_mode(self, cam: Camera) -> None:
+        """Reset camera to preview mode after a scan."""
+        self._set_bright_mode_blocking(cam)
+
+    def _apply_axis_config_blocking(self, cam: Camera) -> None:
+        """Apply saved AXIS config if available."""
+        with self._camera_lock:
+            try:
+                from marimapper.camera.settings_controller import VAPIXSettingsController
+                if isinstance(cam._settings_controller, VAPIXSettingsController):
+                    success = cam._settings_controller.apply_config()
+                    if success:
+                        logger.info(f"Camera {self.camera_id}: Applied config file successfully")
+                    else:
+                        logger.warning(f"Camera {self.camera_id}: Some config settings failed to apply")
+                    cam.eat()  # Flush buffered frames after settings change
+                else:
+                    logger.debug(f"Camera {self.camera_id}: Not an AXIS camera, ignoring APPLY_CONFIG")
+            except Exception as e:
+                logger.error(f"Camera {self.camera_id}: Failed to apply config: {e}")
+
+    def _init_control_primitives(self):
+        """Initialize lock and executor inside the child process (spawn-safe)."""
+        if self._camera_lock is None:
+            self._camera_lock = threading.Lock()
+        if self._control_executor is None:
+            self._control_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix=f"camctl-{self.camera_id}"
+            )
+
     def _show_frame(self, cam: Camera, led_detection: Optional[Point2D] = None):
         """
         Show a live preview frame with optional LED detection overlay.
@@ -207,9 +286,7 @@ class DetectionWorker(Process):
         """
         # Ensure we're in dark mode
         if not self._in_dark_mode:
-            set_cam_dark(cam, self.dark_exposure)
-            cam.eat()
-            self._in_dark_mode = True
+            self._set_dark_mode_blocking(cam)
 
         # Check for LED visibility
         image = cam.read()
@@ -289,9 +366,7 @@ class DetectionWorker(Process):
 
         # Ensure we're in dark mode
         if not self._in_dark_mode:
-            set_cam_dark(cam, self.dark_exposure)
-            cam.eat()  # Flush buffered frames
-            self._in_dark_mode = True
+            self._set_dark_mode_blocking(cam)
 
         # Wait for LED to stabilize (coordinator just turned it on)
         time.sleep(0.03)
@@ -410,17 +485,11 @@ class DetectionWorker(Process):
         # SCAN_COMPLETE: Reset to preview mode
         elif command_type == DetectionCommand.SCAN_COMPLETE.value:
             logger.info(f"Camera {self.camera_id}: Received SCAN_COMPLETE")
-            try:
-                set_cam_default(cam)
-                cam.eat()
-                self._in_dark_mode = False
-                logger.info(f"Camera {self.camera_id}: Reset to preview mode")
-            except Exception as e:
-                logger.warning(
-                    f"Camera {self.camera_id}: Failed to reset exposure: {e}"
-                )
-
-            # Send DONE to output queues
+            self._submit_control_task(
+                "reset to preview after scan",
+                lambda: self._reset_preview_mode(cam),
+            )
+            # Send DONE immediately; preview reset continues in background
             self._send_to_output_queues(DetectionControlEnum.DONE, self.view_id)
 
         # SET_MASK: Update detection mask
@@ -450,23 +519,19 @@ class DetectionWorker(Process):
 
         # SET_DARK: Switch to dark exposure mode
         elif command_type == DetectionCommand.SET_DARK.value:
-            try:
-                set_cam_dark(cam, self.dark_exposure)
-                cam.eat()
-                self._in_dark_mode = True
-                logger.info(f"Camera {self.camera_id}: Set to DARK mode")
-            except Exception as e:
-                logger.warning(f"Camera {self.camera_id}: Failed to set dark mode: {e}")
+            self._submit_control_task(
+                "set dark mode",
+                lambda: self._set_dark_mode_blocking(cam),
+            )
+            logger.info(f"Camera {self.camera_id}: DARK mode requested (async)")
 
         # SET_BRIGHT: Switch to bright/preview mode
         elif command_type == DetectionCommand.SET_BRIGHT.value:
-            try:
-                set_cam_default(cam)
-                cam.eat()
-                self._in_dark_mode = False
-                logger.info(f"Camera {self.camera_id}: Set to BRIGHT mode")
-            except Exception as e:
-                logger.warning(f"Camera {self.camera_id}: Failed to set bright mode: {e}")
+            self._submit_control_task(
+                "set bright mode",
+                lambda: self._set_bright_mode_blocking(cam),
+            )
+            logger.info(f"Camera {self.camera_id}: BRIGHT mode requested (async)")
 
         # SET_THRESHOLD: Update detection threshold
         elif command_type == DetectionCommand.SET_THRESHOLD.value:
@@ -480,21 +545,11 @@ class DetectionWorker(Process):
 
         # APPLY_CONFIG: Apply settings from config file (AXIS cameras only)
         elif command_type == DetectionCommand.APPLY_CONFIG.value:
-            try:
-                # Only apply if this is a VAPIX camera
-                from marimapper.camera.settings_controller import VAPIXSettingsController
-                if isinstance(cam._settings_controller, VAPIXSettingsController):
-                    # Apply config from default location
-                    success = cam._settings_controller.apply_config()
-                    if success:
-                        logger.info(f"Camera {self.camera_id}: Applied config file successfully")
-                    else:
-                        logger.warning(f"Camera {self.camera_id}: Some config settings failed to apply")
-                    cam.eat()  # Flush buffered frames after settings change
-                else:
-                    logger.debug(f"Camera {self.camera_id}: Not an AXIS camera, ignoring APPLY_CONFIG")
-            except Exception as e:
-                logger.error(f"Camera {self.camera_id}: Failed to apply config: {e}")
+            self._submit_control_task(
+                "apply AXIS config",
+                lambda: self._apply_axis_config_blocking(cam),
+            )
+            logger.info(f"Camera {self.camera_id}: APPLY_CONFIG requested (async)")
 
         # EXIT: Shutdown
         elif command_type == DetectionCommand.EXIT.value:
@@ -512,6 +567,9 @@ class DetectionWorker(Process):
 
         This is the entry point when the process starts.
         """
+        # Create control executor/lock in the child to keep the worker picklable
+        self._init_control_primitives()
+
         try:
             logger.info(
                 f"DetectionWorker {self.camera_id} starting "
@@ -602,3 +660,10 @@ class DetectionWorker(Process):
                     logger.info(f"Camera {self.camera_id}: Window closed")
                 except Exception as e:
                     logger.warning(f"Camera {self.camera_id}: Failed to close window: {e}")
+
+            # Stop control executor
+            try:
+                if self._control_executor is not None:
+                    self._control_executor.shutdown(wait=False)
+            except Exception:
+                pass

@@ -11,5 +11,18 @@
       "username": "root",
       "password": "hemmer"
     }
+  },
+  {
+    "name": "TestCam2",
+    "video": {
+      "type": "device",
+      "device": "TestCam2"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.90.198",
+      "username": "root",
+      "password": "hemmer"
+    }
   }
 ]

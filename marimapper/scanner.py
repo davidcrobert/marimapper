@@ -285,6 +285,21 @@ class Scanner:
             return None
         return self.detector_frame_queues[detector_index]
 
+    def get_camera_command_queue(self):
+        """
+        Get the LED control queue for direct LED control (GUI).
+
+        This queue accepts commands for controlling LEDs directly:
+        - ("ALL_ON",) - Turn on all LEDs
+        - ("ALL_OFF",) - Turn off all LEDs
+        - ("SET_LED", led_id, state) - Turn on/off specific LED
+        - ("SET_LEDS_BULK", [(led_id, state), ...]) - Bulk LED control
+
+        Returns:
+            Queue for sending LED control commands to the coordinator
+        """
+        return self.coordinator.get_led_control_queue()
+
     def close(self):
         """Shutdown all scanner processes."""
         logger.debug("scanner closing")

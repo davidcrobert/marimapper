@@ -64,6 +64,7 @@ class UnifiedCoordinator(Process):
         self._detector_result_queue = Queue()  # Shared queue for all detector results
         self._led_count_queue = Queue()  # For returning LED count to Scanner
         self._scan_request_queue = Queue()  # For receiving scan requests
+        self._led_control_queue = Queue()  # For LED control commands (GUI)
         self._cancel_event = Event()  # Signal to cancel current scan
         self._exit_event = Event()  # Signal to exit process
 
@@ -99,6 +100,18 @@ class UnifiedCoordinator(Process):
     def add_output_queue(self, queue: Queue2D):
         """Add an output queue for sending scan status updates."""
         self._output_queues.append(queue)
+
+    def get_led_control_queue(self) -> Queue:
+        """
+        Get the LED control queue for direct LED control (GUI).
+
+        Commands:
+        - ("ALL_ON",) - Turn on all LEDs
+        - ("ALL_OFF",) - Turn off all LEDs
+        - ("SET_LED", led_id, state) - Turn on/off specific LED
+        - ("SET_LEDS_BULK", [(led_id, state), ...]) - Bulk LED control
+        """
+        return self._led_control_queue
 
     def request_scan(self, led_from: int, led_to: int, view_id: int):
         """Request a scan to be performed (called from Scanner/GUI)."""
@@ -149,6 +162,69 @@ class UnifiedCoordinator(Process):
         except Exception as e:
             logger.warning(f"Failed to blacken backend: {e}")
             return False
+
+    def _handle_led_control(self, backend, command):
+        """
+        Handle LED control commands from GUI.
+
+        Args:
+            backend: LED backend instance
+            command: Tuple of (command_type, *args)
+        """
+        try:
+            if not isinstance(command, tuple) or len(command) < 1:
+                logger.warning(f"Invalid LED control command format: {command}")
+                return
+
+            cmd_type = command[0]
+
+            if cmd_type == "ALL_ON":
+                # Turn on all LEDs (white if RGB, or just on if single-color)
+                if hasattr(backend, "set_leds"):
+                    buffer = [[255, 255, 255] for _ in range(backend.get_led_count())]
+                    backend.set_leds(buffer)
+                elif hasattr(backend, "set_led"):
+                    for i in range(backend.get_led_count()):
+                        backend.set_led(i, True)
+                logger.debug("All LEDs turned on")
+
+            elif cmd_type == "ALL_OFF":
+                # Turn off all LEDs
+                self._blacken_backend(backend)
+                logger.debug("All LEDs turned off")
+
+            elif cmd_type == "SET_LED":
+                # Set single LED: ("SET_LED", led_id, state)
+                if len(command) < 3:
+                    logger.warning(f"SET_LED missing arguments: {command}")
+                    return
+
+                led_id = command[1]
+                state = command[2]
+
+                if hasattr(backend, "set_led"):
+                    backend.set_led(led_id, state)
+                    logger.debug(f"LED {led_id} set to {'ON' if state else 'OFF'}")
+
+            elif cmd_type == "SET_LEDS_BULK":
+                # Bulk set LEDs: ("SET_LEDS_BULK", [(led_id, state), ...])
+                if len(command) < 2:
+                    logger.warning(f"SET_LEDS_BULK missing arguments: {command}")
+                    return
+
+                changes = command[1]
+                if hasattr(backend, "set_led"):
+                    for led_id, state in changes:
+                        backend.set_led(led_id, state)
+                    logger.debug(f"Bulk LED control: {len(changes)} LEDs updated")
+
+            else:
+                logger.warning(f"Unknown LED control command: {cmd_type}")
+
+        except Exception as e:
+            logger.error(f"Failed to handle LED control command: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _wait_for_all_detector_responses(
         self, timeout: float, expected_response_types: List[str]
@@ -496,9 +572,16 @@ class UnifiedCoordinator(Process):
             self._led_count_queue.put(-1)
             return
 
-        # Main loop: wait for scan requests
+        # Main loop: wait for scan requests and LED control commands
         while not self._exit_event.is_set():
             try:
+                # Check for LED control commands (non-blocking)
+                try:
+                    led_control_cmd = self._led_control_queue.get_nowait()
+                    self._handle_led_control(backend, led_control_cmd)
+                except:
+                    pass  # Queue empty, that's fine
+
                 # Check for scan request (non-blocking with timeout)
                 try:
                     scan_request = self._scan_request_queue.get(timeout=0.1)

@@ -1140,9 +1140,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
             camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put(CameraCommand.ALL_OFF)
+            camera_queue.put(("ALL_OFF",))
             self.log_widget.log_info("All LEDs off")
             self.statusBar().showMessage("LEDs: All off")
         except Exception as e:
@@ -1156,9 +1155,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
             camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put((CameraCommand.SET_LED, (led_id, turn_on)))
+            camera_queue.put(("SET_LED", led_id, turn_on))
             status = "ON" if turn_on else "OFF"
             self.log_widget.log_info(f"LED {led_id} turned {status}")
         except Exception as e:
@@ -1176,9 +1174,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
             camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put((CameraCommand.SET_LEDS_BULK, changes))
+            camera_queue.put(("SET_LEDS_BULK", changes))
 
             on_count = sum(1 for _, state in changes if state)
             off_count = len(changes) - on_count
@@ -1194,9 +1191,8 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from marimapper.detector_process import CameraCommand
             camera_queue = self.scanner.get_camera_command_queue()
-            camera_queue.put(CameraCommand.ALL_ON)
+            camera_queue.put(("ALL_ON",))
             self.log_widget.log_info("All LEDs on")
             self.statusBar().showMessage("LEDs: All on")
         except Exception as e:

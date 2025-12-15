@@ -194,6 +194,20 @@ Add `marimapper/compat/` shims (re-export old names) during migration.
    - Optional: Update detector.py to re-export from pipeline.detection
    - Phase 4 can be considered COMPLETE - move to Phase 5 (Scanning and coordinator layer)
 
+   **Bugfix (Post-Phase 4):**
+   - [x] Fixed GUI LED control after refactoring
+     - Issue: GUI was calling `scanner.get_camera_command_queue()` which didn't exist in unified architecture
+     - Root cause: Old architecture had detector_process expose LED control; new architecture uses coordinator
+     - Solution:
+       - Added `_led_control_queue` to UnifiedCoordinator
+       - Added `_handle_led_control()` method to process LED commands (ALL_ON, ALL_OFF, SET_LED, SET_LEDS_BULK)
+       - Modified coordinator's run loop to check LED control queue alongside scan requests
+       - Added `get_led_control_queue()` method to UnifiedCoordinator
+       - Added `get_camera_command_queue()` method to Scanner (returns coordinator's LED control queue)
+       - Updated GUI main_window.py to use new command format (tuples instead of CameraCommand enums)
+     - Files modified: unified_coordinator.py (+82 lines), scanner.py (+14 lines), gui/main_window.py (4 locations)
+     - All changes compile successfully ✓
+
 5) **Scanning and coordinator layer**
    - Move `scanner.py`, `unified_coordinator.py`, `queues.py`, and `timeout_controller.py` into `pipeline/scanning/`.
    - Introduce a reusable `ProcessService` base (start, stop, join with timeouts) and a lightweight scheduler orchestrating detectors and backend.

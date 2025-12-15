@@ -223,6 +223,33 @@ Add `marimapper/compat/` shims (re-export old names) during migration.
      - Files modified: pipeline/detection/algorithms.py (+13 lines), pipeline/detection/__init__.py, pipeline/detection/worker.py (+48 lines)
      - All changes compile successfully ✓
 
+   **Bugfix (Post-Phase 4 #2):**
+   - [x] Fixed GUI project creation failing with 'Scanner' object has no attribute 'detector'
+     - Issue: GUI tried to access `scanner.detector` (singular) which doesn't exist in unified architecture
+     - Root cause: Old code checked for `multi_camera_mode` and used:
+       - `scanner.detector_workers` for multi-camera mode
+       - `scanner.detector` (singular) for single-camera mode
+     - New architecture: Always uses `scanner.detectors` (plural list) regardless of camera count
+     - Solution: Fixed 3 locations in gui/main_window.py:
+       - `create_project()` - line ~1706
+       - `open_project()` - line ~1785
+       - `restart_file_writer()` - line ~1928
+     - Changed from conditional check to simple iteration:
+       ```python
+       # OLD (broken):
+       if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
+           for worker in self.scanner.detector_workers:
+               worker.add_output_queue(...)
+       else:
+           self.scanner.detector.add_output_queue(...)
+
+       # NEW (fixed):
+       for detector in self.scanner.detectors:
+           detector.add_output_queue(...)
+       ```
+     - Files modified: gui/main_window.py (3 locations, -18 lines, +9 lines)
+     - GUI compilation successful ✓
+
 5) **Scanning and coordinator layer**
    - Move `scanner.py`, `unified_coordinator.py`, `queues.py`, and `timeout_controller.py` into `pipeline/scanning/`.
    - Introduce a reusable `ProcessService` base (start, stop, join with timeouts) and a lightweight scheduler orchestrating detectors and backend.

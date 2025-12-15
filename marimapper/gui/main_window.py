@@ -1697,13 +1697,10 @@ class MainWindow(QMainWindow):
                     self.scanner.file_writer.get_3d_input_queue()
                 )
 
-                if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
-                    for worker in self.scanner.detector_workers:
-                        worker.add_output_queue(
-                            self.scanner.file_writer.get_2d_input_queue()
-                        )
-                else:
-                    self.scanner.detector.add_output_queue(
+                # Add file writer output queue to all detectors
+                # (Unified architecture always uses detectors list)
+                for detector in self.scanner.detectors:
+                    detector.add_output_queue(
                         self.scanner.file_writer.get_2d_input_queue()
                     )
 
@@ -1776,13 +1773,10 @@ class MainWindow(QMainWindow):
                     self.scanner.file_writer.get_3d_input_queue()
                 )
 
-                if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
-                    for worker in self.scanner.detector_workers:
-                        worker.add_output_queue(
-                            self.scanner.file_writer.get_2d_input_queue()
-                        )
-                else:
-                    self.scanner.detector.add_output_queue(
+                # Add file writer output queue to all detectors
+                # (Unified architecture always uses detectors list)
+                for detector in self.scanner.detectors:
+                    detector.add_output_queue(
                         self.scanner.file_writer.get_2d_input_queue()
                     )
 
@@ -1925,13 +1919,10 @@ class MainWindow(QMainWindow):
                 self.scanner.file_writer.get_3d_input_queue()
             )
 
-            if hasattr(self.scanner, 'multi_camera_mode') and self.scanner.multi_camera_mode:
-                for worker in self.scanner.detector_workers:
-                    worker.add_output_queue(
-                        self.scanner.file_writer.get_2d_input_queue()
-                    )
-            else:
-                self.scanner.detector.add_output_queue(
+            # Add file writer output queue to all detectors
+            # (Unified architecture always uses detectors list)
+            for detector in self.scanner.detectors:
+                detector.add_output_queue(
                     self.scanner.file_writer.get_2d_input_queue()
                 )
 

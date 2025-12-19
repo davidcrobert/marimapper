@@ -38,6 +38,8 @@ class ControlPanel(QWidget):
     mask_save_requested = pyqtSignal()  # Save mask to file
     mask_load_requested = pyqtSignal()  # Load mask from file
     camera_selected = pyqtSignal(int)  # For multi-camera mask selection
+    led_count_changed = pyqtSignal(int)  # LED count manually changed
+    led_range_changed = pyqtSignal(int, int)  # LED range (from, to) manually changed
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -59,8 +61,9 @@ class ControlPanel(QWidget):
         led_from_layout.addWidget(QLabel("From:"))
         self.led_from_spinbox = QSpinBox()
         self.led_from_spinbox.setMinimum(0)
-        self.led_from_spinbox.setMaximum(9999)
+        self.led_from_spinbox.setMaximum(99999)  # Match LED count maximum
         self.led_from_spinbox.setValue(0)
+        self.led_from_spinbox.valueChanged.connect(self.on_led_range_changed)
         led_from_layout.addWidget(self.led_from_spinbox)
         led_range_layout.addLayout(led_from_layout)
 
@@ -69,8 +72,9 @@ class ControlPanel(QWidget):
         led_to_layout.addWidget(QLabel("To:"))
         self.led_to_spinbox = QSpinBox()
         self.led_to_spinbox.setMinimum(0)
-        self.led_to_spinbox.setMaximum(9999)
+        self.led_to_spinbox.setMaximum(99999)  # Match LED count maximum
         self.led_to_spinbox.setValue(self.led_count if self.led_count > 0 else 100)
+        self.led_to_spinbox.valueChanged.connect(self.on_led_range_changed)
         led_to_layout.addWidget(self.led_to_spinbox)
         led_range_layout.addLayout(led_to_layout)
 
@@ -92,11 +96,16 @@ class ControlPanel(QWidget):
         views_layout.addStretch()
         view_info_layout.addLayout(views_layout)
 
-        # Second row: Total LEDs
+        # Second row: Total LEDs (editable)
         leds_layout = QHBoxLayout()
         leds_layout.addWidget(QLabel("Total LEDs:"))
-        self.led_count_label = QLabel(str(self.led_count))
-        leds_layout.addWidget(self.led_count_label)
+        self.led_count_spinbox = QSpinBox()
+        self.led_count_spinbox.setMinimum(0)
+        self.led_count_spinbox.setMaximum(99999)
+        self.led_count_spinbox.setValue(self.led_count if self.led_count > 0 else 100)
+        self.led_count_spinbox.setToolTip("Total number of LEDs in your system (editable)")
+        self.led_count_spinbox.valueChanged.connect(self.on_led_count_changed)
+        leds_layout.addWidget(self.led_count_spinbox)
         leds_layout.addStretch()
         view_info_layout.addLayout(leds_layout)
 
@@ -312,11 +321,46 @@ class ControlPanel(QWidget):
         self.stop_scan_requested.emit()
 
     def set_led_count(self, count: int):
-        """Update the LED count."""
+        """Update the LED count (from backend or project load)."""
         self.led_count = count
-        self.led_count_label.setText(str(count))
+        # Block signals to avoid triggering led_count_changed when setting programmatically
+        self.led_count_spinbox.blockSignals(True)
+        self.led_count_spinbox.setValue(count)
+        self.led_count_spinbox.blockSignals(False)
+        # Set LED To value to match (but don't restrict its maximum)
         self.led_to_spinbox.setValue(count)
-        self.led_to_spinbox.setMaximum(count)
+
+    def get_led_count(self) -> int:
+        """Get the current LED count value."""
+        return self.led_count_spinbox.value()
+
+    def on_led_count_changed(self, value: int):
+        """Handle LED count spinbox change."""
+        old_count = self.led_count
+        self.led_count = value
+        # If LED To was set to the old count, update it to the new count
+        # Otherwise, leave it alone (user may have customized it)
+        if self.led_to_spinbox.value() == old_count:
+            self.led_to_spinbox.setValue(value)
+        # Emit signal for project saving
+        self.led_count_changed.emit(value)
+
+    def on_led_range_changed(self):
+        """Handle LED range (from/to) spinbox changes."""
+        led_from = self.led_from_spinbox.value()
+        led_to = self.led_to_spinbox.value()
+        # Emit signal for project saving
+        self.led_range_changed.emit(led_from, led_to)
+
+    def set_led_range(self, led_from: int, led_to: int):
+        """Set LED range values (from project load)."""
+        # Block signals to avoid triggering led_range_changed when setting programmatically
+        self.led_from_spinbox.blockSignals(True)
+        self.led_to_spinbox.blockSignals(True)
+        self.led_from_spinbox.setValue(led_from)
+        self.led_to_spinbox.setValue(led_to)
+        self.led_from_spinbox.blockSignals(False)
+        self.led_to_spinbox.blockSignals(False)
 
     def scan_completed(self):
         """Called when a scan completes successfully."""

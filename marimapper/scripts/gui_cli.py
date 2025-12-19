@@ -162,6 +162,7 @@ def main():
             self.backend_factory = backend_factory
             self.led_start = args.start
             self.led_end = args.end
+            self.led_count = None  # Will be set from backend or loaded from project
             self.interpolate = args.interpolation_max_fill != -1
             self.interpolation_max_fill = args.interpolation_max_fill if args.interpolation_max_fill != -1 else 10000
             self.interpolation_max_error = args.interpolation_max_error if args.interpolation_max_error != -1 else 10000

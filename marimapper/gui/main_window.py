@@ -311,6 +311,8 @@ class MainWindow(QMainWindow):
         self.control_panel.all_off_requested.connect(self.set_all_off)
         self.control_panel.all_on_requested.connect(self.set_all_on)
         self.control_panel.apply_config_requested.connect(self.apply_axis_config)
+        self.control_panel.led_count_changed.connect(self.on_led_count_changed)
+        self.control_panel.led_range_changed.connect(self.on_led_range_changed)
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
@@ -786,10 +788,21 @@ class MainWindow(QMainWindow):
 
         Args:
             scanner: The initialized Scanner instance
-            led_count: Number of LEDs in the system
+            led_count: Number of LEDs in the system (from backend)
         """
         self.scanner = scanner
-        self.control_panel.set_led_count(led_count)
+
+        # Use saved LED count from scanner_args if available, otherwise use backend's count
+        saved_led_count = getattr(self.scanner_args, 'led_count', None)
+        if saved_led_count is not None and saved_led_count > 0:
+            final_led_count = saved_led_count
+            self.log_widget.log_info(f"Using saved LED count: {final_led_count}")
+        else:
+            final_led_count = led_count
+            self.scanner_args.led_count = led_count
+            self.log_widget.log_info(f"Using backend LED count: {final_led_count}")
+
+        self.control_panel.set_led_count(final_led_count)
 
         # Set threshold slider to match scanner's initial threshold
         initial_threshold = self.scanner_args.threshold
@@ -1014,6 +1027,44 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Threshold: {value}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set threshold: {str(e)}")
+
+    @pyqtSlot(int)
+    def on_led_count_changed(self, value: int):
+        """Handle LED count change from control panel."""
+        # Update scanner_args
+        self.scanner_args.led_count = value
+
+        # Save to active project if one is open
+        if self.project_manager.is_project_active():
+            project = self.project_manager.get_active_project()
+            if "scanner_config" in project.config and "scanner" in project.config["scanner_config"]:
+                project.config["scanner_config"]["scanner"]["led_count"] = value
+                self.project_manager.save_project(project)
+                self.log_widget.log_info(f"LED count updated to {value} and saved to project")
+        else:
+            self.log_widget.log_info(f"LED count updated to {value}")
+
+        self.statusBar().showMessage(f"LED count: {value}")
+
+    @pyqtSlot(int, int)
+    def on_led_range_changed(self, led_from: int, led_to: int):
+        """Handle LED range change from control panel."""
+        # Update scanner_args
+        self.scanner_args.led_start = led_from
+        self.scanner_args.led_end = led_to
+
+        # Save to active project if one is open
+        if self.project_manager.is_project_active():
+            project = self.project_manager.get_active_project()
+            if "scanner_config" in project.config and "scanner" in project.config["scanner_config"]:
+                project.config["scanner_config"]["scanner"]["led_start"] = led_from
+                project.config["scanner_config"]["scanner"]["led_end"] = led_to
+                self.project_manager.save_project(project)
+                self.log_widget.log_info(f"LED range updated to {led_from}-{led_to} and saved to project")
+        else:
+            self.log_widget.log_info(f"LED range updated to {led_from}-{led_to}")
+
+        self.statusBar().showMessage(f"LED range: {led_from}-{led_to}")
 
     def _reset_scan_progress(self, led_from: Optional[int] = None, led_to: Optional[int] = None):
         """Initialize or clear the scan progress bar."""
@@ -1662,6 +1713,11 @@ class MainWindow(QMainWindow):
         name, location, description, copy_settings = dialog.get_project_config()
 
         try:
+            # Sync current GUI values to scanner_args before creating project
+            self.scanner_args.led_count = self.control_panel.get_led_count()
+            self.scanner_args.led_start = self.control_panel.led_from_spinbox.value()
+            self.scanner_args.led_end = self.control_panel.led_to_spinbox.value()
+
             # Get backend type
             backend_type = get_backend_type_from_args(self.scanner_args)
 
@@ -1805,6 +1861,25 @@ class MainWindow(QMainWindow):
             return
 
         project = self.project_manager.get_active_project()
+
+        # Load scanner settings (LED count, LED range)
+        scanner_config = project.config.get("scanner_config", {}).get("scanner", {})
+        if scanner_config:
+            # Restore LED count
+            led_count = scanner_config.get("led_count")
+            if led_count is not None:
+                self.control_panel.set_led_count(led_count)
+                self.scanner_args.led_count = led_count
+                self.log_widget.log_info(f"Restored LED count: {led_count}")
+
+            # Restore LED range
+            led_start = scanner_config.get("led_start")
+            led_end = scanner_config.get("led_end")
+            if led_start is not None and led_end is not None:
+                self.control_panel.set_led_range(led_start, led_end)
+                self.scanner_args.led_start = led_start
+                self.scanner_args.led_end = led_end
+                self.log_widget.log_info(f"Restored LED range: {led_start}-{led_end}")
 
         # Note: Masks are not loaded from projects - they are session-only
         # and should be drawn fresh each time

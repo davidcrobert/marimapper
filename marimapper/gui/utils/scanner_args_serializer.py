@@ -152,6 +152,7 @@ def serialize_scanner_args(scanner_args: Any, backend_type: str) -> Dict[str, An
         "scanner": {
             "led_start": scanner_args.led_start,
             "led_end": scanner_args.led_end,
+            "led_count": getattr(scanner_args, 'led_count', None),
             "interpolation_max_fill": scanner_args.interpolation_max_fill,
             "interpolation_max_error": scanner_args.interpolation_max_error,
             "check_movement": scanner_args.check_movement,
@@ -194,6 +195,7 @@ def deserialize_scanner_args(config: Dict[str, Any], output_dir: Path) -> Any:
             self.backend_factory = backend_factory
             self.led_start = scanner_config["led_start"]
             self.led_end = scanner_config["led_end"]
+            self.led_count = scanner_config.get("led_count")  # May be None for old projects
             self.interpolate = scanner_config["interpolation_max_fill"] != -1
             self.interpolation_max_fill = scanner_config["interpolation_max_fill"]
             self.interpolation_max_error = scanner_config["interpolation_max_error"]

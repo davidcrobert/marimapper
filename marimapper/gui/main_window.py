@@ -1684,13 +1684,16 @@ class MainWindow(QMainWindow):
             self.project_manager.set_transform(transform)
 
     def update_project_status(self):
-        """Update project status label in status bar."""
+        """Update project status label in status bar and window title."""
         if self.project_manager.is_project_active():
             project = self.project_manager.get_active_project()
-            self.project_label.setText(f"Project: {project.config['project_name']}")
+            project_name = project.config['project_name']
+            self.project_label.setText(f"Project: {project_name}")
+            self.setWindowTitle(f"MariMapper - {project_name}")
             self.close_project_action.setEnabled(True)
         else:
             self.project_label.setText("No project loaded")
+            self.setWindowTitle("MariMapper - LED Mapping Tool")
             self.close_project_action.setEnabled(False)
 
     def on_new_project(self):

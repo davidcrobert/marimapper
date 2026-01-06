@@ -1001,7 +1001,13 @@ class MainWindow(QMainWindow):
         self._reset_scan_progress(led_from, led_to)
 
         # Start scanning this universe's LED range
-        self.scanner.coordinator.request_scan(led_from, led_to, self.current_view_id)
+        self.scanner.coordinator.request_scan(
+            led_from,
+            led_to,
+            self.current_view_id,
+            universe=universe_num,
+            universe_led_base=led_from,
+        )
         self.statusBar().showMessage(
             f"Scanning universe {universe_num} [{self.current_universe_index + 1}/{len(self.universes_to_scan)}]: "
             f"LEDs {led_from}-{led_to}..."

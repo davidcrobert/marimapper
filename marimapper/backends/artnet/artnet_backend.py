@@ -3,6 +3,7 @@ from time import sleep
 import enum
 from functools import partial
 import argparse
+from typing import Optional
 
 
 def artnet_set_args(parser):
@@ -109,7 +110,24 @@ class Backend:
         self.send_packet(packet)
         self.sequence = (self.sequence + 1) % 256
 
-    def set_led(self, led_index: int, on: bool) -> None:
+    def set_led(self, led_index: int, on: bool, universe: Optional[int] = None) -> None:
+        if universe is not None:
+            channels = [0] * 512
+            fixture_base_channel = led_index * self.channels_per_fixture
+            if fixture_base_channel < 512:
+                for c in range(0, self.channels_per_fixture):
+                    channel_index = fixture_base_channel + c
+                    if channel_index >= 512:
+                        break
+                    channels[channel_index] = 255 if on else 0
+
+            for _ in range(0, 5):
+                self.send_universe(universe, channels)
+                sleep(0.05)
+
+            self.send_packet(self.get_artsync_packet())
+            return
+
         # Calculate how many universes we need to cover all the LEDs
         universe_count = (self.get_led_count() * self.channels_per_fixture) // 512 + 1
 

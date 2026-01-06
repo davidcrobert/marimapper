@@ -37,6 +37,7 @@ from marimapper.gui.widgets.status_table import StatusTable
 from marimapper.gui.widgets.visualizer_3d_widget import Visualizer3DWidget
 from marimapper.gui.widgets.transform_controls import TransformControlsWidget
 from marimapper.gui.widgets.placement_panel import PlacementPanel
+from marimapper.gui.widgets.universes_widget import UniversesWidget
 from marimapper.gui.worker import StatusMonitorThread
 from marimapper.gui.project_manager import ProjectManager
 from marimapper.gui.dialogs import NewProjectDialog, OpenProjectDialog
@@ -126,6 +127,10 @@ class MainWindow(QMainWindow):
         self.scan_range_start = 0
         self.scan_range_total = 0
         self.scan_progress_value = 0
+        # Universe scanning state
+        self.is_scanning_universes = False
+        self.current_universe_index = 0
+        self.universes_to_scan = []
 
         # Mask management (per-camera)
         self.current_masks = {}  # {camera_index: numpy_array}
@@ -171,6 +176,11 @@ class MainWindow(QMainWindow):
         # 3D visualization widget
         self.visualizer_3d_widget = Visualizer3DWidget()
         self.tab_widget.addTab(self.visualizer_3d_widget, "3D View")
+
+        # Universes widget
+        self.universes_widget = UniversesWidget()
+        self.tab_widget.addTab(self.universes_widget, "Universes")
+
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
         self.visualizer_3d_widget.key_pressed.connect(self.on_visualizer_key)
 
@@ -312,8 +322,9 @@ class MainWindow(QMainWindow):
         self.control_panel.all_on_requested.connect(self.set_all_on)
         self.control_panel.apply_config_requested.connect(self.apply_axis_config)
         self.control_panel.led_count_changed.connect(self.on_led_count_changed)
-        self.control_panel.led_range_changed.connect(self.on_led_range_changed)
-        self.control_panel.universe_changed.connect(self.on_universe_changed)
+
+        # Connect universes widget signals
+        self.universes_widget.universes_changed.connect(self.on_universes_changed)
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
@@ -930,29 +941,71 @@ class MainWindow(QMainWindow):
                 self.detector_widget.update_frame(frame)
 
     @pyqtSlot(int, int)
-    def start_scan(self, led_from: int, led_to: int):
+    def start_scan(self, led_from: int = None, led_to: int = None):
         """
-        Start a scan with the specified LED range.
+        Start a scan. If universes are configured, scans through all universes.
+        Otherwise, uses the LED range from control panel.
 
         Args:
-            led_from: First LED ID to scan
-            led_to: Last LED ID to scan (exclusive)
+            led_from: First LED ID to scan (from control panel, may be ignored)
+            led_to: Last LED ID to scan (from control panel, may be ignored)
         """
         if self.scanner is None:
             self.log_widget.log_error("Scanner not initialized")
             return
 
         try:
-            self.log_widget.log_info(f"Starting scan: LEDs {led_from} to {led_to}, view {self.current_view_id}")
-            # Initialize progress bar for this scan
-            self._reset_scan_progress(led_from, led_to)
-            # Use unified coordinator for all camera counts
-            self.scanner.coordinator.request_scan(led_from, led_to, self.current_view_id)
-            self.statusBar().showMessage(f"Scanning LEDs {led_from}-{led_to}...")
+            # Check if universes are configured
+            universes = self.universes_widget.get_universes()
+
+            if universes:
+                # Use universe-based scanning
+                self.is_scanning_universes = True
+                self.current_universe_index = 0
+                self.universes_to_scan = universes
+                self.log_widget.log_info(f"Starting multi-universe scan: {len(universes)} universes")
+                # Start scanning the first universe
+                self._scan_next_universe()
+            else:
+                # No universes configured
+                self.log_widget.log_error("No universes configured. Please configure universes in the Universes tab.")
+                self.control_panel.scan_failed("No universes configured")
+                return
 
         except Exception as e:
             self.log_widget.log_error(f"Failed to start scan: {str(e)}")
             self.control_panel.scan_failed(str(e))
+
+    def _scan_next_universe(self):
+        """Start scanning the next universe in the sequence."""
+        if self.current_universe_index >= len(self.universes_to_scan):
+            # All universes scanned
+            self.is_scanning_universes = False
+            self.log_widget.log_success("Multi-universe scan completed")
+            self.control_panel.scan_completed()
+            return
+
+        # Get current universe configuration
+        universe_config = self.universes_to_scan[self.current_universe_index]
+        universe_num = universe_config["universe"]
+        led_from = universe_config["led_from"]
+        led_to = universe_config["led_to"]
+
+        self.log_widget.log_info(
+            f"Scanning universe {universe_num} ({self.current_universe_index + 1}/{len(self.universes_to_scan)}): "
+            f"LEDs {led_from} to {led_to}, view {self.current_view_id}"
+        )
+
+
+        # Initialize progress bar for this universe
+        self._reset_scan_progress(led_from, led_to)
+
+        # Start scanning this universe's LED range
+        self.scanner.coordinator.request_scan(led_from, led_to, self.current_view_id)
+        self.statusBar().showMessage(
+            f"Scanning universe {universe_num} [{self.current_universe_index + 1}/{len(self.universes_to_scan)}]: "
+            f"LEDs {led_from}-{led_to}..."
+        )
 
     @pyqtSlot()
     def stop_scan(self):
@@ -962,6 +1015,10 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # Reset universe scanning state
+            self.is_scanning_universes = False
+            self.current_universe_index = 0
+
             # Use coordinator's cancel_scan method (works for all camera counts)
             self.scanner.coordinator.cancel_scan()
             self.log_widget.log_info("Scan cancellation requested")
@@ -1047,46 +1104,24 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"LED count: {value}")
 
-    @pyqtSlot(int, int)
-    def on_led_range_changed(self, led_from: int, led_to: int):
-        """Handle LED range change from control panel."""
-        # Update scanner_args
-        self.scanner_args.led_start = led_from
-        self.scanner_args.led_end = led_to
-
+    @pyqtSlot(list)
+    def on_universes_changed(self, universes: list):
+        """Handle universes configuration change."""
         # Save to active project if one is open
         if self.project_manager.is_project_active():
             project = self.project_manager.get_active_project()
-            if "scanner_config" in project.config and "scanner" in project.config["scanner_config"]:
-                project.config["scanner_config"]["scanner"]["led_start"] = led_from
-                project.config["scanner_config"]["scanner"]["led_end"] = led_to
-                self.project_manager.save_project(project)
-                self.log_widget.log_info(f"LED range updated to {led_from}-{led_to} and saved to project")
+            # Store universes in project config
+            if "scanner_config" not in project.config:
+                project.config["scanner_config"] = {}
+            project.config["scanner_config"]["universes"] = universes
+            self.project_manager.save_project(project)
+
+            total_leds = sum(u["led_to"] - u["led_from"] for u in universes) if universes else 0
+            self.log_widget.log_info(f"Universe configuration updated ({len(universes)} universes, {total_leds} total LEDs) and saved to project")
         else:
-            self.log_widget.log_info(f"LED range updated to {led_from}-{led_to}")
+            self.log_widget.log_info(f"Universe configuration updated ({len(universes)} universes)")
 
-        self.statusBar().showMessage(f"LED range: {led_from}-{led_to}")
-
-    @pyqtSlot(int)
-    def on_universe_changed(self, universe: int):
-        """Handle universe change from control panel."""
-        # Update scanner_args (base_universe is stored in backend args)
-        self.scanner_args.base_universe = universe
-
-        # Save to active project if one is open
-        if self.project_manager.is_project_active():
-            project = self.project_manager.get_active_project()
-            if "scanner_config" in project.config and "backend" in project.config["scanner_config"]:
-                # Ensure args dict exists
-                if "args" not in project.config["scanner_config"]["backend"]:
-                    project.config["scanner_config"]["backend"]["args"] = {}
-                project.config["scanner_config"]["backend"]["args"]["base_universe"] = universe
-                self.project_manager.save_project(project)
-                self.log_widget.log_info(f"Base universe updated to {universe} and saved to project")
-        else:
-            self.log_widget.log_info(f"Base universe updated to {universe}")
-
-        self.statusBar().showMessage(f"Base universe: {universe}")
+        self.statusBar().showMessage(f"Universe configuration: {len(universes)} universes")
 
     def _reset_scan_progress(self, led_from: Optional[int] = None, led_to: Optional[int] = None):
         """Initialize or clear the scan progress bar."""
@@ -1336,14 +1371,36 @@ class MainWindow(QMainWindow):
         Args:
             view_id: ID of the completed view
         """
-        self.control_panel.scan_completed()
-        self.current_view_id += 1
         # Fill progress bar on completion
         if self.scan_range_total > 0:
             self.scan_progress_value = self.scan_range_total
             self.scan_progress_bar.setValue(self.scan_range_total)
             self.scan_progress_bar.setFormat(f"{self.scan_range_total}/{self.scan_range_total}")
-        self.statusBar().showMessage(f"Scan completed for view {view_id}")
+
+        # Check if we're in universe scanning mode
+        if self.is_scanning_universes:
+            # Move to next universe
+            self.current_universe_index += 1
+
+            if self.current_universe_index < len(self.universes_to_scan):
+                # More universes to scan
+                self.log_widget.log_success(
+                    f"Universe {self.universes_to_scan[self.current_universe_index - 1]['universe']} completed"
+                )
+                # Start scanning next universe (without incrementing view_id yet)
+                self._scan_next_universe()
+            else:
+                # All universes scanned
+                self.is_scanning_universes = False
+                self.control_panel.scan_completed()
+                self.current_view_id += 1
+                self.log_widget.log_success(f"All universes scanned for view {view_id}")
+                self.statusBar().showMessage(f"Multi-universe scan completed for view {view_id}")
+        else:
+            # Single scan completed (non-universe mode)
+            self.control_panel.scan_completed()
+            self.current_view_id += 1
+            self.statusBar().showMessage(f"Scan completed for view {view_id}")
 
     @pyqtSlot(str)
     def on_scan_failed(self, error_msg: str):
@@ -1740,8 +1797,7 @@ class MainWindow(QMainWindow):
         try:
             # Sync current GUI values to scanner_args before creating project
             self.scanner_args.led_count = self.control_panel.get_led_count()
-            self.scanner_args.led_start = self.control_panel.led_from_spinbox.value()
-            self.scanner_args.led_end = self.control_panel.led_to_spinbox.value()
+            # Note: LED range is now managed via universes, not scanner_args
 
             # Get backend type
             backend_type = get_backend_type_from_args(self.scanner_args)
@@ -1897,14 +1953,13 @@ class MainWindow(QMainWindow):
                 self.scanner_args.led_count = led_count
                 self.log_widget.log_info(f"Restored LED count: {led_count}")
 
-            # Restore LED range
+            # Note: LED range is now managed via universes configuration
+            # Keep led_start/led_end in scanner_args for backward compatibility
             led_start = scanner_config.get("led_start")
             led_end = scanner_config.get("led_end")
             if led_start is not None and led_end is not None:
-                self.control_panel.set_led_range(led_start, led_end)
                 self.scanner_args.led_start = led_start
                 self.scanner_args.led_end = led_end
-                self.log_widget.log_info(f"Restored LED range: {led_start}-{led_end}")
 
         # Restore backend settings (base_universe)
         backend_config = project.config.get("scanner_config", {}).get("backend", {})
@@ -1912,9 +1967,15 @@ class MainWindow(QMainWindow):
             backend_args = backend_config.get("args", {})
             base_universe = backend_args.get("base_universe")
             if base_universe is not None:
-                self.control_panel.set_universe(base_universe)
                 self.scanner_args.base_universe = base_universe
                 self.log_widget.log_info(f"Restored base universe: {base_universe}")
+
+        # Restore universes configuration
+        universes = project.config.get("scanner_config", {}).get("universes")
+        if universes:
+            self.universes_widget.set_universes(universes)
+            total_leds = sum(u["led_to"] - u["led_from"] for u in universes)
+            self.log_widget.log_info(f"Restored {len(universes)} universes ({total_leds} total LEDs)")
 
         # Note: Masks are not loaded from projects - they are session-only
         # and should be drawn fresh each time

@@ -39,8 +39,6 @@ class ControlPanel(QWidget):
     mask_load_requested = pyqtSignal()  # Load mask from file
     camera_selected = pyqtSignal(int)  # For multi-camera mask selection
     led_count_changed = pyqtSignal(int)  # LED count manually changed
-    led_range_changed = pyqtSignal(int, int)  # LED range (from, to) manually changed
-    universe_changed = pyqtSignal(int)  # Base universe manually changed
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -52,47 +50,6 @@ class ControlPanel(QWidget):
     def init_ui(self):
         """Initialize the user interface."""
         layout = QVBoxLayout()
-
-        # LED Range Group
-        led_range_group = QGroupBox("LED Range")
-        led_range_layout = QVBoxLayout()
-
-        # LED From
-        led_from_layout = QHBoxLayout()
-        led_from_layout.addWidget(QLabel("From:"))
-        self.led_from_spinbox = QSpinBox()
-        self.led_from_spinbox.setMinimum(0)
-        self.led_from_spinbox.setMaximum(99999)  # Match LED count maximum
-        self.led_from_spinbox.setValue(0)
-        self.led_from_spinbox.valueChanged.connect(self.on_led_range_changed)
-        led_from_layout.addWidget(self.led_from_spinbox)
-        led_range_layout.addLayout(led_from_layout)
-
-        # LED To
-        led_to_layout = QHBoxLayout()
-        led_to_layout.addWidget(QLabel("To:"))
-        self.led_to_spinbox = QSpinBox()
-        self.led_to_spinbox.setMinimum(0)
-        self.led_to_spinbox.setMaximum(99999)  # Match LED count maximum
-        self.led_to_spinbox.setValue(self.led_count if self.led_count > 0 else 100)
-        self.led_to_spinbox.valueChanged.connect(self.on_led_range_changed)
-        led_to_layout.addWidget(self.led_to_spinbox)
-        led_range_layout.addLayout(led_to_layout)
-
-        # Universe
-        universe_layout = QHBoxLayout()
-        universe_layout.addWidget(QLabel("Universe:"))
-        self.universe_spinbox = QSpinBox()
-        self.universe_spinbox.setMinimum(0)
-        self.universe_spinbox.setMaximum(32767)  # DMX universe max
-        self.universe_spinbox.setValue(0)  # Default to universe 0
-        self.universe_spinbox.setToolTip("Base universe for ArtNet/DMX (0-32767)")
-        self.universe_spinbox.valueChanged.connect(self.on_universe_changed)
-        universe_layout.addWidget(self.universe_spinbox)
-        led_range_layout.addLayout(universe_layout)
-
-        led_range_group.setLayout(led_range_layout)
-        layout.addWidget(led_range_group)
 
         # Horizontal layout for View Info and Scan Controls (side by side)
         info_scan_layout = QHBoxLayout()
@@ -310,19 +267,13 @@ class ControlPanel(QWidget):
 
     def on_start_scan(self):
         """Handle start scan button click."""
-        led_from = self.led_from_spinbox.value()
-        led_to = self.led_to_spinbox.value()
-
-        if led_from >= led_to:
-            self.status_label.setText("Error: 'From' must be less than 'To'")
-            return
-
         self.is_scanning = True
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self.status_label.setText(f"Status: Scanning LEDs {led_from}-{led_to}...")
+        self.status_label.setText(f"Status: Scanning...")
 
-        self.start_scan_requested.emit(led_from, led_to)
+        # Emit with None values - main_window will use universes configuration
+        self.start_scan_requested.emit(0, 0)
 
     def on_stop_scan(self):
         """Handle stop scan button click."""
@@ -340,8 +291,6 @@ class ControlPanel(QWidget):
         self.led_count_spinbox.blockSignals(True)
         self.led_count_spinbox.setValue(count)
         self.led_count_spinbox.blockSignals(False)
-        # Set LED To value to match (but don't restrict its maximum)
-        self.led_to_spinbox.setValue(count)
 
     def get_led_count(self) -> int:
         """Get the current LED count value."""
@@ -349,47 +298,9 @@ class ControlPanel(QWidget):
 
     def on_led_count_changed(self, value: int):
         """Handle LED count spinbox change."""
-        old_count = self.led_count
         self.led_count = value
-        # If LED To was set to the old count, update it to the new count
-        # Otherwise, leave it alone (user may have customized it)
-        if self.led_to_spinbox.value() == old_count:
-            self.led_to_spinbox.setValue(value)
         # Emit signal for project saving
         self.led_count_changed.emit(value)
-
-    def on_led_range_changed(self):
-        """Handle LED range (from/to) spinbox changes."""
-        led_from = self.led_from_spinbox.value()
-        led_to = self.led_to_spinbox.value()
-        # Emit signal for project saving
-        self.led_range_changed.emit(led_from, led_to)
-
-    def set_led_range(self, led_from: int, led_to: int):
-        """Set LED range values (from project load)."""
-        # Block signals to avoid triggering led_range_changed when setting programmatically
-        self.led_from_spinbox.blockSignals(True)
-        self.led_to_spinbox.blockSignals(True)
-        self.led_from_spinbox.setValue(led_from)
-        self.led_to_spinbox.setValue(led_to)
-        self.led_from_spinbox.blockSignals(False)
-        self.led_to_spinbox.blockSignals(False)
-
-    def on_universe_changed(self, value: int):
-        """Handle universe spinbox change."""
-        # Emit signal for project saving
-        self.universe_changed.emit(value)
-
-    def set_universe(self, universe: int):
-        """Set universe value (from project load)."""
-        # Block signals to avoid triggering universe_changed when setting programmatically
-        self.universe_spinbox.blockSignals(True)
-        self.universe_spinbox.setValue(universe)
-        self.universe_spinbox.blockSignals(False)
-
-    def get_universe(self) -> int:
-        """Get the current universe value."""
-        return self.universe_spinbox.value()
 
     def scan_completed(self):
         """Called when a scan completes successfully."""

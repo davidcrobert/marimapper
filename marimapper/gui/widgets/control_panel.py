@@ -316,7 +316,7 @@ class ControlPanel(QWidget):
         self.is_scanning = False
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
-        self.status_label.setText(f"Status: Failed - {error_msg}")
+        self.status_label.setText("Status: Failed")
 
     def reset_view_count(self):
         """Reset the view counter."""

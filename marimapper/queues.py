@@ -40,7 +40,11 @@ class RequestDetectionsQueue(BaseQueue):
 
 class Queue2D(BaseQueue):
 
-    def put(self, control: DetectionControlEnum, data: Union[LED2D, int, None]) -> None:
+    def put(
+        self,
+        control: DetectionControlEnum,
+        data: Union[LED2D, int, str, dict, None],
+    ) -> None:
         self._queue.put((control, data))
 
     def get(self, timeout=None) -> tuple[DetectionControlEnum, Any]:

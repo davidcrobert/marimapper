@@ -58,6 +58,7 @@ class FFmpegCapture:
         self._frame_lock = threading.Lock()
         self._frame_event = threading.Event()  # Signals when new frame is available
         self._stop_reader = threading.Event()
+        self._frame_counter = 0
 
         logger.info(f"FFmpegCapture initialized for {device_identifier} at {width}x{height}@{fps}fps")
 
@@ -187,6 +188,7 @@ class FFmpegCapture:
                 # Store as latest frame (thread-safe)
                 with self._frame_lock:
                     self._latest_frame = frame
+                    self._frame_counter += 1
 
                 # Signal that a frame is available
                 self._frame_event.set()
@@ -230,18 +232,32 @@ class FFmpegCapture:
         This is important after changing camera settings to ensure
         fresh frames reflect the new settings.
 
-        For efficiency, this restarts the FFmpeg subprocess instead of
-        reading frames one by one.
+        This waits for a few fresh frames from the background reader.
 
         Args:
-            count: Number of frames to discard (parameter kept for compatibility,
-                  but restart is more efficient)
+            count: Number of frames to wait for before returning
         """
-        logger.debug(f"Flushing buffer by restarting FFmpeg capture")
+        if not self.is_running_flag:
+            return
 
-        # Restart is more efficient than reading frames one by one
-        self.stop()
-        self.start()
+        with self._frame_lock:
+            start_counter = self._frame_counter
+
+        target = start_counter + max(1, count)
+        max_wait = max(0.5, count / max(1, self.fps)) + 0.5
+        deadline = time.time() + max_wait
+
+        while time.time() < deadline:
+            with self._frame_lock:
+                current = self._frame_counter
+            if current >= target:
+                return
+            time.sleep(0.01)
+
+        logger.debug(
+            f"Flush timed out waiting for frames (wanted {count}, "
+            f"saw {current - start_counter})."
+        )
 
     def stop(self) -> None:
         """Stop the FFmpeg subprocess and clean up resources."""

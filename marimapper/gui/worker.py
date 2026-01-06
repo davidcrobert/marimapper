@@ -119,10 +119,19 @@ class StatusMonitorThread(QThread):
 
                         elif control == DetectionControlEnum.FAIL:
                             # Scan failed
-                            self.signals.scan_failed.emit("Detection failed - LED visible when all should be off")
-                            self.signals.log_message.emit(
-                                "error", "Scan failed - LED visible when all should be off"
-                            )
+                            error_msg = None
+                            if isinstance(data, str):
+                                error_msg = data
+                            elif isinstance(data, dict):
+                                error_msg = data.get("message") or data.get("error")
+                            elif data is not None:
+                                error_msg = str(data)
+
+                            if not error_msg:
+                                error_msg = "Detection failed - LED visible when all should be off"
+
+                            self.signals.scan_failed.emit(error_msg)
+                            self.signals.log_message.emit("error", f"Scan failed - {error_msg}")
 
                         elif control == DetectionControlEnum.DELETE:
                             # View deleted due to camera movement

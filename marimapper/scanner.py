@@ -336,7 +336,10 @@ class Scanner:
                 control, data = self.detector_update_queue.get()
 
                 if control == DetectionControlEnum.FAIL:
-                    logger.error("Scan failed")
+                    if data:
+                        logger.error(f"Scan failed: {data}")
+                    else:
+                        logger.error("Scan failed")
                     return False
 
                 if control in [DetectionControlEnum.DETECT, DetectionControlEnum.SKIP]:

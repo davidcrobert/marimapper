@@ -351,10 +351,10 @@ class UnifiedCoordinator(Process):
 
         return responses
 
-    def _check_darkness(self, backend) -> bool:
+    def _check_darkness(self, backend) -> tuple[bool, str]:
         """
         Perform darkness check - verify no LED is visible.
-        Returns True if all clear, False if any detector sees LED.
+        Returns (True, "") if all clear, (False, reason) if any detector sees LED.
         """
         logger.info("Performing darkness check (false positive prevention)...")
 
@@ -373,25 +373,52 @@ class UnifiedCoordinator(Process):
 
         # Check if all detectors reported clear
         all_clear = True
+        failed_detectors = []
+        missing_detectors = []
+        error_detectors = []
         for detector_id in range(self.num_detectors):
             if detector_id not in responses:
                 logger.warning(f"Detector {detector_id} did not respond to darkness check")
                 all_clear = False
+                missing_detectors.append(detector_id)
                 continue
 
-            response_type, _ = responses[detector_id]
+            response_type, data = responses[detector_id]
             if response_type == "DARKNESS_FAIL":
                 logger.error(
                     f"Detector {detector_id} can see an LED when all should be off"
                 )
                 all_clear = False
+                failed_detectors.append(detector_id)
+            elif response_type == "ERROR":
+                logger.error(f"Detector {detector_id} reported error during darkness check: {data}")
+                all_clear = False
+                error_detectors.append((detector_id, data))
 
         if all_clear:
             logger.info("Darkness check PASSED - all detectors clear")
-        else:
-            logger.error("Darkness check FAILED - aborting scan")
+            return True, ""
 
-        return all_clear
+        reason_parts = []
+        if failed_detectors:
+            ids = ", ".join(str(d) for d in failed_detectors)
+            reason_parts.append(f"LED visible on detector(s): {ids}")
+        if missing_detectors:
+            ids = ", ".join(str(d) for d in missing_detectors)
+            reason_parts.append(f"no response from detector(s): {ids}")
+        if error_detectors:
+            details = ", ".join(
+                f"{detector_id} ({data})" if data else str(detector_id)
+                for detector_id, data in error_detectors
+            )
+            reason_parts.append(f"detector error(s): {details}")
+
+        reason = "Darkness check failed"
+        if reason_parts:
+            reason = f"{reason} - " + "; ".join(reason_parts)
+
+        logger.error("Darkness check FAILED - aborting scan")
+        return False, reason
 
     def _detect_led_synchronized(
         self,
@@ -548,8 +575,12 @@ class UnifiedCoordinator(Process):
         self._cancel_event.clear()
 
         # Step 1: Darkness Check (false positive prevention)
-        if not self._check_darkness(backend):
-            self._send_to_output_queues(DetectionControlEnum.FAIL, None)
+        darkness_ok, darkness_reason = self._check_darkness(backend)
+        if not darkness_ok:
+            self._send_to_output_queues(
+                DetectionControlEnum.FAIL,
+                darkness_reason or "Darkness check failed",
+            )
             return False
 
         # Step 2: LED-by-LED Detection Loop
@@ -559,7 +590,10 @@ class UnifiedCoordinator(Process):
             # Check for cancellation
             if self._cancel_event.is_set():
                 logger.info(f"Scan cancelled at LED {led_id}")
-                self._send_to_output_queues(DetectionControlEnum.FAIL, None)
+                self._send_to_output_queues(
+                    DetectionControlEnum.FAIL,
+                    f"Scan cancelled at LED {led_id}",
+                )
                 self._blacken_backend(backend)
                 return False
 

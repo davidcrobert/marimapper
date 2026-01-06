@@ -107,6 +107,8 @@ class DetectionWorker(Process):
         self._window_name = f"MariMapper - Camera {self.camera_id}"
         self._window_initialized = False
         self._preview_error_logged = False
+        self._held_error_frame = None
+        self._held_error_until = 0.0
 
         # Mask state
         self._mask = None  # numpy array (H, W) uint8
@@ -243,6 +245,13 @@ class DetectionWorker(Process):
             return
 
         try:
+            if self._held_error_frame is not None:
+                if time.monotonic() < self._held_error_until:
+                    self._emit_frame(self._held_error_frame)
+                    return
+                self._held_error_frame = None
+                self._held_error_until = 0.0
+
             frame = cam.read()
             if frame is None:
                 return
@@ -253,24 +262,27 @@ class DetectionWorker(Process):
             else:
                 rendered_frame = frame
 
-            # Send to GUI frame queue if provided
-            if self.frame_queue is not None:
-                try:
-                    self.frame_queue.put_nowait(rendered_frame)
-                except queue.Full:
-                    pass  # Skip frame if queue full
-            else:
-                # Fallback to cv2.imshow for CLI
-                if not self._window_initialized:
-                    cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-                    self._window_initialized = True
-                cv2.imshow(self._window_name, rendered_frame)
-                cv2.waitKey(1)
+            self._emit_frame(rendered_frame)
 
         except Exception as e:
             if not self._preview_error_logged:
                 logger.warning(f"Camera {self.camera_id}: Frame display error: {e}")
                 self._preview_error_logged = True
+
+    def _emit_frame(self, rendered_frame: np.ndarray) -> None:
+        """Send a pre-rendered frame to GUI or CLI display."""
+        if self.frame_queue is not None:
+            try:
+                self.frame_queue.put_nowait(rendered_frame)
+            except queue.Full:
+                pass  # Skip frame if queue full
+        else:
+            # Fallback to cv2.imshow for CLI
+            if not self._window_initialized:
+                cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                self._window_initialized = True
+            cv2.imshow(self._window_name, rendered_frame)
+            cv2.waitKey(1)
 
     def _check_darkness(self, cam: Camera) -> bool:
         """
@@ -306,37 +318,19 @@ class DetectionWorker(Process):
             if self.display:
                 rendered_frame = draw_error_detection(image, led_detection)
 
-                # Send to GUI or display
                 if self.frame_queue is not None:
                     try:
-                        # Clear queue and send error frame
                         while not self.frame_queue.empty():
                             try:
                                 self.frame_queue.get_nowait()
                             except:
                                 break
-                        self.frame_queue.put_nowait(rendered_frame)
                     except:
                         pass
-                else:
-                    # CLI mode - show window
-                    if not self._window_initialized:
-                        cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
-                        self._window_initialized = True
-                    cv2.imshow(self._window_name, rendered_frame)
-                    cv2.waitKey(1)
 
-                # Keep the error frame visible for a moment
-                time.sleep(2.0)  # 2 seconds to see the red marker
-
-                # Continue showing the error frame
-                for _ in range(10):  # Show for ~1 more second
-                    if self.frame_queue is not None:
-                        try:
-                            self.frame_queue.put_nowait(rendered_frame)
-                        except:
-                            pass
-                    time.sleep(0.1)
+                self._held_error_frame = rendered_frame
+                self._held_error_until = time.monotonic() + 3.0
+                self._emit_frame(rendered_frame)
 
             return False
 

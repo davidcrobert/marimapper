@@ -155,15 +155,19 @@ class Backend:
         # Send an ArtSync packet for good measure, although I'm not sure many devices actually use it.
         self.send_packet(self.get_artsync_packet())
 
-    def set_leds(self, updates) -> bool:
+    def set_leds(self, updates, universe: Optional[int] = None) -> bool:
         """
         Bulk update LEDs. Accepts either:
         - Iterable of (index, value) tuples, where value can be bool/int or an RGB-like iterable.
         - Iterable of per-LED values (same length as LED count), used for compatibility with existing calls.
         """
         led_count = self.get_led_count()
-        universe_count = (led_count * self.channels_per_fixture + 511) // 512
-        channels = [0] * (512 * universe_count)
+        if universe is None:
+            universe_count = (led_count * self.channels_per_fixture + 511) // 512
+            channels = [0] * (512 * universe_count)
+        else:
+            universe_count = 1
+            channels = [0] * 512
 
         def level_from(val):
             if isinstance(val, (list, tuple)):
@@ -188,19 +192,27 @@ class Backend:
             iterable = enumerate(updates)
 
         for idx, val in iterable:
-            if idx < 0 or idx >= led_count:
+            if idx < 0:
+                continue
+            if universe is None and idx >= led_count:
                 continue
             level = level_from(val)
             base = idx * self.channels_per_fixture
             for c in range(self.channels_per_fixture):
-                channels[base + c] = level
+                channel_index = base + c
+                if channel_index >= len(channels):
+                    break
+                channels[channel_index] = level
 
         universes = [channels[u * 512 : (u + 1) * 512] for u in range(universe_count)]
 
         # Mirror the multi-frame approach used in set_led to ensure devices latch
         for _ in range(0, 5):
-            for u in range(universe_count):
-                self.send_universe(u, universes[u])
+            if universe is None:
+                for u in range(universe_count):
+                    self.send_universe(u, universes[u])
+            else:
+                self.send_universe(universe, universes[0])
             sleep(0.05)
 
         self.send_packet(self.get_artsync_packet())

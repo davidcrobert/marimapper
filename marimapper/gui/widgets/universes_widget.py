@@ -24,6 +24,7 @@ class UniversesWidget(QWidget):
 
     # Signals
     universes_changed = pyqtSignal(list)  # Emits list of universe configs when changed
+    universe_lights_requested = pyqtSignal(int, int, int, bool)  # universe, led_from, led_to, turn_on
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,13 +46,14 @@ class UniversesWidget(QWidget):
 
         # Table for universes
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Universe", "LED From", "LED To"])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Universe", "LED From", "LED To", "Lights"])
 
         # Configure table
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
 
@@ -162,15 +164,42 @@ class UniversesWidget(QWidget):
         to_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setItem(row, 2, to_item)
 
+        # Control buttons
+        controls = QWidget()
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(2, 2, 2, 2)
+        controls_layout.setSpacing(4)
+
+        on_button = QPushButton("On")
+        on_button.setToolTip("Turn on all LEDs in this universe range")
+        on_button.clicked.connect(
+            lambda checked=False, u=universe_config: self._emit_universe_lights(u, True)
+        )
+        controls_layout.addWidget(on_button)
+
+        off_button = QPushButton("Off")
+        off_button.setToolTip("Turn off all LEDs in this universe range")
+        off_button.clicked.connect(
+            lambda checked=False, u=universe_config: self._emit_universe_lights(u, False)
+        )
+        controls_layout.addWidget(off_button)
+
+        controls.setLayout(controls_layout)
+        self.table.setCellWidget(row, 3, controls)
+
         self.table.blockSignals(False)
 
     def on_cell_changed(self, row: int, column: int):
         """Handle cell changes in the table."""
         if row >= len(self.universes):
             return
+        if column > 2:
+            return
 
         try:
             item = self.table.item(row, column)
+            if item is None:
+                return
             value = int(item.text())
 
             if value < 0:
@@ -207,6 +236,30 @@ class UniversesWidget(QWidget):
             )
             # Revert to previous value
             self.reload_table()
+
+    def _emit_universe_lights(self, universe_config: Dict[str, int], turn_on: bool):
+        """Emit a command to toggle all LEDs for a universe range."""
+        try:
+            universe = int(universe_config.get("universe", 0))
+            led_from = int(universe_config.get("led_from", 0))
+            led_to = int(universe_config.get("led_to", 0))
+        except (TypeError, ValueError):
+            QMessageBox.warning(
+                self,
+                "Invalid Universe",
+                "Universe and LED range must be integers."
+            )
+            return
+
+        if led_to <= led_from:
+            QMessageBox.warning(
+                self,
+                "Invalid Range",
+                "LED From must be less than LED To."
+            )
+            return
+
+        self.universe_lights_requested.emit(universe, led_from, led_to, turn_on)
 
     def reload_table(self):
         """Reload the table from internal data."""

@@ -325,6 +325,7 @@ class MainWindow(QMainWindow):
 
         # Connect universes widget signals
         self.universes_widget.universes_changed.connect(self.on_universes_changed)
+        self.universes_widget.universe_lights_requested.connect(self.on_universe_lights_requested)
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
@@ -1006,7 +1007,6 @@ class MainWindow(QMainWindow):
             led_to,
             self.current_view_id,
             universe=universe_num,
-            universe_led_base=led_from,
         )
         self.statusBar().showMessage(
             f"Scanning universe {universe_num} [{self.current_universe_index + 1}/{len(self.universes_to_scan)}]: "
@@ -1128,6 +1128,38 @@ class MainWindow(QMainWindow):
             self.log_widget.log_info(f"Universe configuration updated ({len(universes)} universes)")
 
         self.statusBar().showMessage(f"Universe configuration: {len(universes)} universes")
+
+    @pyqtSlot(int, int, int, bool)
+    def on_universe_lights_requested(
+        self,
+        universe: int,
+        led_from: int,
+        led_to: int,
+        turn_on: bool,
+    ):
+        """Handle requests to toggle all LEDs in a universe range."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        if led_to <= led_from:
+            self.log_widget.log_error(
+                f"Invalid universe range {led_from}-{led_to} for universe {universe}"
+            )
+            return
+
+        try:
+            camera_queue = self.scanner.get_camera_command_queue()
+            changes = [(led_id, turn_on) for led_id in range(led_from, led_to)]
+            camera_queue.put(("SET_LEDS_BULK", universe, changes))
+            state = "ON" if turn_on else "OFF"
+            self.log_widget.log_info(
+                f"Universe {universe} LEDs {led_from} to {led_to} set {state}"
+            )
+        except Exception as e:
+            self.log_widget.log_error(
+                f"Failed to control universe {universe} LEDs: {str(e)}"
+            )
 
     def _reset_scan_progress(self, led_from: Optional[int] = None, led_to: Optional[int] = None):
         """Initialize or clear the scan progress bar."""

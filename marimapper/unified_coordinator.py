@@ -86,6 +86,7 @@ class UnifiedCoordinator(Process):
         self.detector_success_counts: Dict[int, int] = {i: 0 for i in range(num_detectors)}
         self.detector_failure_counts: Dict[int, int] = {i: 0 for i in range(num_detectors)}
         self._backend_supports_universe = False
+        self._backend_supports_universe_set_leds = False
 
     def get_command_queue(self, detector_id: int) -> Queue:
         """Get the command queue for a specific detector."""
@@ -111,9 +112,9 @@ class UnifiedCoordinator(Process):
         - ("ALL_ON",) - Turn on all LEDs
         - ("ALL_OFF",) - Turn off all LEDs
         - ("SET_LED", led_id, state) - Turn on/off specific LED
-        - ("SET_LED", universe, led_id, state) - Turn on/off specific LED in a universe
+        - ("SET_LED", universe, led_id, state) - Turn on/off specific LED at a universe address
         - ("SET_LEDS_BULK", [(led_id, state), ...]) - Bulk LED control
-        - ("SET_LEDS_BULK", universe, [(led_id, state), ...]) - Bulk LED control in a universe
+        - ("SET_LEDS_BULK", universe, [(led_id, state), ...]) - Bulk LED control at universe addresses
         """
         return self._led_control_queue
 
@@ -123,17 +124,12 @@ class UnifiedCoordinator(Process):
         led_to: int,
         view_id: int,
         universe: Optional[int] = None,
-        universe_led_base: Optional[int] = None,
     ):
         """Request a scan to be performed (called from Scanner/GUI)."""
-        if universe is not None and universe_led_base is None:
-            universe_led_base = led_from
         if universe is None:
             self._scan_request_queue.put((led_from, led_to, view_id))
         else:
-            self._scan_request_queue.put(
-                (led_from, led_to, view_id, universe, universe_led_base)
-            )
+            self._scan_request_queue.put((led_from, led_to, view_id, universe))
 
     def cancel_scan(self):
         """Cancel the current scan."""
@@ -182,8 +178,16 @@ class UnifiedCoordinator(Process):
             return False
 
     def _supports_universe_param(self, backend) -> bool:
+        return self._supports_universe_kwarg(getattr(backend, "set_led", None))
+
+    def _supports_universe_set_leds(self, backend) -> bool:
+        return self._supports_universe_kwarg(getattr(backend, "set_leds", None))
+
+    def _supports_universe_kwarg(self, func) -> bool:
+        if func is None:
+            return False
         try:
-            signature = inspect.signature(backend.set_led)
+            signature = inspect.signature(func)
         except (ValueError, TypeError):
             return False
         for param in signature.parameters.values():
@@ -191,33 +195,15 @@ class UnifiedCoordinator(Process):
                 return True
         return "universe" in signature.parameters
 
-    def _map_led_id(
-        self,
-        led_id: int,
-        universe: Optional[int],
-        universe_led_base: Optional[int],
-    ) -> int:
-        if universe is None or universe_led_base is None:
-            return led_id
-        mapped = led_id - universe_led_base
-        if mapped < 0:
-            logger.warning(
-                f"Mapped LED id {mapped} is negative (led_id={led_id}, base={universe_led_base})"
-            )
-            return led_id
-        return mapped
-
     def _set_backend_led(
         self,
         backend,
         led_id: int,
         state: bool,
         universe: Optional[int],
-        universe_led_base: Optional[int],
     ) -> None:
         if universe is not None and self._backend_supports_universe:
-            backend_led_id = self._map_led_id(led_id, universe, universe_led_base)
-            backend.set_led(backend_led_id, state, universe=universe)
+            backend.set_led(led_id, state, universe=universe)
         else:
             backend.set_led(led_id, state)
 
@@ -268,7 +254,7 @@ class UnifiedCoordinator(Process):
                     state = command[2]
 
                 if hasattr(backend, "set_led"):
-                    self._set_backend_led(backend, led_id, state, universe, None)
+                    self._set_backend_led(backend, led_id, state, universe)
                     logger.debug(
                         f"LED {led_id} set to {'ON' if state else 'OFF'}"
                         + (f" on universe {universe}" if universe is not None else "")
@@ -287,16 +273,16 @@ class UnifiedCoordinator(Process):
                 else:
                     universe = None
                     changes = command[1]
-                if hasattr(backend, "set_led"):
+                if hasattr(backend, "set_leds") and universe is not None and self._backend_supports_universe_set_leds:
+                    backend.set_leds(changes, universe=universe)
+                elif hasattr(backend, "set_led"):
                     for led_id, state in changes:
-                        if universe is not None and self._backend_supports_universe:
-                            backend.set_led(led_id, state, universe=universe)
-                        else:
-                            backend.set_led(led_id, state)
-                    logger.debug(
-                        f"Bulk LED control: {len(changes)} LEDs updated"
-                        + (f" on universe {universe}" if universe is not None else "")
-                    )
+                        self._set_backend_led(backend, led_id, state, universe)
+
+                logger.debug(
+                    f"Bulk LED control: {len(changes)} LEDs updated"
+                    + (f" on universe {universe}" if universe is not None else "")
+                )
 
             else:
                 logger.warning(f"Unknown LED control command: {cmd_type}")
@@ -412,7 +398,6 @@ class UnifiedCoordinator(Process):
         backend,
         led_id: int,
         universe: Optional[int] = None,
-        universe_led_base: Optional[int] = None,
     ) -> Dict[int, tuple]:
         """
         Coordinate detection of a single LED across all detectors.
@@ -425,7 +410,7 @@ class UnifiedCoordinator(Process):
             Dict mapping detector_id -> (response_type, data)
         """
         # Turn on LED
-        self._set_backend_led(backend, led_id, True, universe, universe_led_base)
+        self._set_backend_led(backend, led_id, True, universe)
 
         # Wait for LED to stabilize
         if self.led_stabilization_delay > 0:
@@ -445,7 +430,7 @@ class UnifiedCoordinator(Process):
         )
 
         # Turn off LED
-        self._set_backend_led(backend, led_id, False, universe, universe_led_base)
+        self._set_backend_led(backend, led_id, False, universe)
 
         # Log results
         successful = sum(
@@ -461,7 +446,6 @@ class UnifiedCoordinator(Process):
         first_led_id: int,
         original_positions: Dict[int, Point2D],
         universe: Optional[int] = None,
-        universe_led_base: Optional[int] = None,
     ) -> bool:
         """
         Re-detect first LED and compare positions to check for camera movement.
@@ -481,7 +465,7 @@ class UnifiedCoordinator(Process):
         logger.info(f"Performing movement check by re-detecting LED {first_led_id}...")
 
         # Turn LED on
-        self._set_backend_led(backend, first_led_id, True, universe, universe_led_base)
+        self._set_backend_led(backend, first_led_id, True, universe)
         time.sleep(self.led_stabilization_delay)
 
         # Broadcast REDETECT_LED command
@@ -498,7 +482,7 @@ class UnifiedCoordinator(Process):
         )
 
         # Turn LED off
-        self._set_backend_led(backend, first_led_id, False, universe, universe_led_base)
+        self._set_backend_led(backend, first_led_id, False, universe)
 
         # Compare positions
         movement_detected = False
@@ -545,7 +529,6 @@ class UnifiedCoordinator(Process):
         led_to: int,
         view_id: int,
         universe: Optional[int] = None,
-        universe_led_base: Optional[int] = None,
     ) -> bool:
         """
         Execute a complete scan with all checks.
@@ -585,7 +568,6 @@ class UnifiedCoordinator(Process):
                 backend,
                 led_id,
                 universe=universe,
-                universe_led_base=universe_led_base,
             )
 
             # Report per-LED progress to output queues
@@ -613,7 +595,6 @@ class UnifiedCoordinator(Process):
                 led_from,
                 first_led_positions,
                 universe=universe,
-                universe_led_base=universe_led_base,
             )
 
             if movement_detected:
@@ -669,6 +650,7 @@ class UnifiedCoordinator(Process):
             backend = self.backend_factory()
             logger.info(f"Backend created: {type(backend).__name__}")
             self._backend_supports_universe = self._supports_universe_param(backend)
+            self._backend_supports_universe_set_leds = self._supports_universe_set_leds(backend)
 
             led_count = backend.get_led_count()
             logger.info(f"LED count: {led_count}")
@@ -703,15 +685,11 @@ class UnifiedCoordinator(Process):
                     continue
 
                 # Unpack scan request
-                if len(scan_request) >= 5:
-                    led_from, led_to, view_id, universe, universe_led_base = scan_request
-                elif len(scan_request) == 4:
-                    led_from, led_to, view_id, universe = scan_request
-                    universe_led_base = led_from if universe is not None else None
+                if len(scan_request) >= 4:
+                    led_from, led_to, view_id, universe = scan_request[:4]
                 else:
                     led_from, led_to, view_id = scan_request
                     universe = None
-                    universe_led_base = None
 
                 # Adjust led_to if it exceeds backend capacity
                 actual_led_to = min(led_to, led_count)
@@ -723,7 +701,6 @@ class UnifiedCoordinator(Process):
                     actual_led_to,
                     view_id,
                     universe=universe,
-                    universe_led_base=universe_led_base,
                 )
 
                 # Report statistics after scan

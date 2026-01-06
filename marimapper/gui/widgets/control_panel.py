@@ -40,6 +40,7 @@ class ControlPanel(QWidget):
     camera_selected = pyqtSignal(int)  # For multi-camera mask selection
     led_count_changed = pyqtSignal(int)  # LED count manually changed
     led_range_changed = pyqtSignal(int, int)  # LED range (from, to) manually changed
+    universe_changed = pyqtSignal(int)  # Base universe manually changed
 
     def __init__(self, led_count: int = 0, parent=None):
         super().__init__(parent)
@@ -77,6 +78,18 @@ class ControlPanel(QWidget):
         self.led_to_spinbox.valueChanged.connect(self.on_led_range_changed)
         led_to_layout.addWidget(self.led_to_spinbox)
         led_range_layout.addLayout(led_to_layout)
+
+        # Universe
+        universe_layout = QHBoxLayout()
+        universe_layout.addWidget(QLabel("Universe:"))
+        self.universe_spinbox = QSpinBox()
+        self.universe_spinbox.setMinimum(0)
+        self.universe_spinbox.setMaximum(32767)  # DMX universe max
+        self.universe_spinbox.setValue(0)  # Default to universe 0
+        self.universe_spinbox.setToolTip("Base universe for ArtNet/DMX (0-32767)")
+        self.universe_spinbox.valueChanged.connect(self.on_universe_changed)
+        universe_layout.addWidget(self.universe_spinbox)
+        led_range_layout.addLayout(universe_layout)
 
         led_range_group.setLayout(led_range_layout)
         layout.addWidget(led_range_group)
@@ -361,6 +374,22 @@ class ControlPanel(QWidget):
         self.led_to_spinbox.setValue(led_to)
         self.led_from_spinbox.blockSignals(False)
         self.led_to_spinbox.blockSignals(False)
+
+    def on_universe_changed(self, value: int):
+        """Handle universe spinbox change."""
+        # Emit signal for project saving
+        self.universe_changed.emit(value)
+
+    def set_universe(self, universe: int):
+        """Set universe value (from project load)."""
+        # Block signals to avoid triggering universe_changed when setting programmatically
+        self.universe_spinbox.blockSignals(True)
+        self.universe_spinbox.setValue(universe)
+        self.universe_spinbox.blockSignals(False)
+
+    def get_universe(self) -> int:
+        """Get the current universe value."""
+        return self.universe_spinbox.value()
 
     def scan_completed(self):
         """Called when a scan completes successfully."""

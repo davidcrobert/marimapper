@@ -313,6 +313,7 @@ class MainWindow(QMainWindow):
         self.control_panel.apply_config_requested.connect(self.apply_axis_config)
         self.control_panel.led_count_changed.connect(self.on_led_count_changed)
         self.control_panel.led_range_changed.connect(self.on_led_range_changed)
+        self.control_panel.universe_changed.connect(self.on_universe_changed)
 
         # Connect status table signals
         self.status_table.led_toggle_requested.connect(self.set_individual_led)
@@ -1065,6 +1066,27 @@ class MainWindow(QMainWindow):
             self.log_widget.log_info(f"LED range updated to {led_from}-{led_to}")
 
         self.statusBar().showMessage(f"LED range: {led_from}-{led_to}")
+
+    @pyqtSlot(int)
+    def on_universe_changed(self, universe: int):
+        """Handle universe change from control panel."""
+        # Update scanner_args (base_universe is stored in backend args)
+        self.scanner_args.base_universe = universe
+
+        # Save to active project if one is open
+        if self.project_manager.is_project_active():
+            project = self.project_manager.get_active_project()
+            if "scanner_config" in project.config and "backend" in project.config["scanner_config"]:
+                # Ensure args dict exists
+                if "args" not in project.config["scanner_config"]["backend"]:
+                    project.config["scanner_config"]["backend"]["args"] = {}
+                project.config["scanner_config"]["backend"]["args"]["base_universe"] = universe
+                self.project_manager.save_project(project)
+                self.log_widget.log_info(f"Base universe updated to {universe} and saved to project")
+        else:
+            self.log_widget.log_info(f"Base universe updated to {universe}")
+
+        self.statusBar().showMessage(f"Base universe: {universe}")
 
     def _reset_scan_progress(self, led_from: Optional[int] = None, led_to: Optional[int] = None):
         """Initialize or clear the scan progress bar."""
@@ -1883,6 +1905,16 @@ class MainWindow(QMainWindow):
                 self.scanner_args.led_start = led_start
                 self.scanner_args.led_end = led_end
                 self.log_widget.log_info(f"Restored LED range: {led_start}-{led_end}")
+
+        # Restore backend settings (base_universe)
+        backend_config = project.config.get("scanner_config", {}).get("backend", {})
+        if backend_config:
+            backend_args = backend_config.get("args", {})
+            base_universe = backend_args.get("base_universe")
+            if base_universe is not None:
+                self.control_panel.set_universe(base_universe)
+                self.scanner_args.base_universe = base_universe
+                self.log_widget.log_info(f"Restored base universe: {base_universe}")
 
         # Note: Masks are not loaded from projects - they are session-only
         # and should be drawn fresh each time

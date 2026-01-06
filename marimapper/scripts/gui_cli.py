@@ -171,6 +171,8 @@ def main():
             self.axis_config = axis_config
             self.axis_configs = camera_configs
             self.camera_configs = parsed_camera_configs
+            # Extract base_universe from backend args (defaults to 0 if not present)
+            self.base_universe = getattr(args, 'base_universe', 0)
 
     scanner_args = ScannerArgs()
 

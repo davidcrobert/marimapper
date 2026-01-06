@@ -203,6 +203,8 @@ def deserialize_scanner_args(config: Dict[str, Any], output_dir: Path) -> Any:
             self.camera_model = camera_config["camera_model"]
             self.axis_config = deserialize_axis_config(camera_config.get("axis_config"))
             self.axis_configs = deserialize_axis_configs(camera_config.get("axis_configs"))
+            # Extract base_universe from backend args for easy access
+            self.base_universe = config["backend"]["args"].get("base_universe", 0)
 
     return ScannerArgs(), backend_type
 

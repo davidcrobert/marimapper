@@ -38,7 +38,8 @@ class UniversesWidget(QWidget):
         # Header with instructions
         header_label = QLabel(
             "Configure universes with individual LED ranges. "
-            "During scanning, LEDs will be stepped through universe by universe."
+            "Each universe has its own LED indexing (e.g., Universe 1: LEDs 0-105, Universe 2: LEDs 0-95). "
+            "During scanning, LEDs will be stepped through universe by universe in order."
         )
         header_label.setWordWrap(True)
         header_label.setStyleSheet("padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -47,7 +48,7 @@ class UniversesWidget(QWidget):
         # Table for universes
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Universe", "LED From", "LED To", "Lights"])
+        self.table.setHorizontalHeaderLabels(["Universe", "Start LED", "End LED", "Controls"])
 
         # Configure table
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -92,13 +93,13 @@ class UniversesWidget(QWidget):
         # Determine next universe number
         if self.universes:
             next_universe = max(u["universe"] for u in self.universes) + 1
-            last_led_to = self.universes[-1]["led_to"]
-            next_from = last_led_to
-            next_to = next_from + 170  # Default 170 LEDs per universe
         else:
             next_universe = 0
-            next_from = 0
-            next_to = 170
+
+        # Each universe has its own LED range starting from 0
+        # Default: 170 LEDs per universe (0 to 170)
+        next_from = 0
+        next_to = 170
 
         # Add to internal list
         universe_config = {
@@ -218,7 +219,7 @@ class UniversesWidget(QWidget):
                 QMessageBox.warning(
                     self,
                     "Invalid Range",
-                    "LED From must be less than LED To"
+                    "Start LED must be less than End LED"
                 )
                 # Revert to previous value
                 self.reload_table()
@@ -255,7 +256,7 @@ class UniversesWidget(QWidget):
             QMessageBox.warning(
                 self,
                 "Invalid Range",
-                "LED From must be less than LED To."
+                "Start LED must be less than End LED."
             )
             return
 

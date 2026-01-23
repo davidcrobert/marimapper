@@ -66,19 +66,6 @@ class ControlPanel(QWidget):
         views_layout.addStretch()
         view_info_layout.addLayout(views_layout)
 
-        # Second row: Total LEDs (editable)
-        leds_layout = QHBoxLayout()
-        leds_layout.addWidget(QLabel("Total LEDs:"))
-        self.led_count_spinbox = QSpinBox()
-        self.led_count_spinbox.setMinimum(0)
-        self.led_count_spinbox.setMaximum(99999)
-        self.led_count_spinbox.setValue(self.led_count if self.led_count > 0 else 100)
-        self.led_count_spinbox.setToolTip("Total number of LEDs in your system (editable)")
-        self.led_count_spinbox.valueChanged.connect(self.on_led_count_changed)
-        leds_layout.addWidget(self.led_count_spinbox)
-        leds_layout.addStretch()
-        view_info_layout.addLayout(leds_layout)
-
         view_info_group.setLayout(view_info_layout)
         info_scan_layout.addWidget(view_info_group)
 
@@ -285,22 +272,20 @@ class ControlPanel(QWidget):
         self.stop_scan_requested.emit()
 
     def set_led_count(self, count: int):
-        """Update the LED count (from backend or project load)."""
+        """
+        Update the LED count (from backend or project load).
+        NOTE: This is now a stub for backward compatibility.
+        LED count is determined by universes configuration.
+        """
         self.led_count = count
-        # Block signals to avoid triggering led_count_changed when setting programmatically
-        self.led_count_spinbox.blockSignals(True)
-        self.led_count_spinbox.setValue(count)
-        self.led_count_spinbox.blockSignals(False)
 
     def get_led_count(self) -> int:
-        """Get the current LED count value."""
-        return self.led_count_spinbox.value()
-
-    def on_led_count_changed(self, value: int):
-        """Handle LED count spinbox change."""
-        self.led_count = value
-        # Emit signal for project saving
-        self.led_count_changed.emit(value)
+        """
+        Get the current LED count value.
+        NOTE: This is now a stub for backward compatibility.
+        LED count is determined by universes configuration.
+        """
+        return self.led_count
 
     def scan_completed(self):
         """Called when a scan completes successfully."""

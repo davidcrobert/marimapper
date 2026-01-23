@@ -7,7 +7,7 @@ from pathlib import Path
 from marimapper.unified_detector import UnifiedDetector
 from marimapper.unified_coordinator import UnifiedCoordinator
 from marimapper.queues import Queue2D, Queue3D, Queue3DInfo, DetectionControlEnum
-from multiprocessing import get_logger, set_start_method, get_start_method, Queue
+from multiprocessing import get_logger, set_start_method, get_start_method, Queue, Value
 from marimapper.file_tools import get_all_2d_led_maps
 from marimapper.utils import get_user_confirmation
 from marimapper.visualize_process import VisualiseProcess
@@ -140,6 +140,10 @@ class Scanner:
         self.sfm.add_output_queue(self.gui_3d_data_queue)
         self.sfm.add_output_info_queue(self.gui_3d_info_queue)
 
+        # Shared value for detection timeout (can be adjusted from GUI)
+        # 'd' = double precision float, initial value 1.5 seconds
+        self._detection_timeout_value = Value('d', 1.5)
+
         # Create coordinator (always, even for single camera)
         self.coordinator = UnifiedCoordinator(
             backend_factory=backend_factory,
@@ -147,7 +151,7 @@ class Scanner:
             led_start=led_start,
             led_end=led_end,
             check_movement=check_movement,
-            detection_timeout=1.5,
+            detection_timeout_value=self._detection_timeout_value,
             led_stabilization_delay=0.05,
         )
 
@@ -299,6 +303,30 @@ class Scanner:
             Queue for sending LED control commands to the coordinator
         """
         return self.coordinator.get_led_control_queue()
+
+    def get_detection_timeout(self) -> float:
+        """
+        Get the current detection timeout value.
+
+        Returns:
+            Current detection timeout in seconds
+        """
+        return self._detection_timeout_value.value
+
+    def set_detection_timeout(self, timeout_seconds: float):
+        """
+        Set the detection timeout (time to wait for LED detection before skipping).
+
+        This value is shared with the coordinator process and takes effect
+        immediately for the next LED detection.
+
+        Args:
+            timeout_seconds: Timeout in seconds (minimum 0.1, maximum 10.0)
+        """
+        # Clamp to reasonable range
+        timeout_seconds = max(0.1, min(10.0, timeout_seconds))
+        self._detection_timeout_value.value = timeout_seconds
+        logger.info(f"Detection timeout set to {timeout_seconds:.2f} seconds")
 
     def close(self):
         """Shutdown all scanner processes."""

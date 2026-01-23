@@ -36,7 +36,7 @@ class UnifiedCoordinator(Process):
         led_start: int,
         led_end: int,
         check_movement: bool = True,
-        detection_timeout: float = 1.5,
+        detection_timeout_value=None,
         led_stabilization_delay: float = 0.05,
     ):
         """
@@ -48,7 +48,7 @@ class UnifiedCoordinator(Process):
             led_start: First LED index to scan
             led_end: Last LED index to scan (exclusive)
             check_movement: Whether to perform movement check at end of scan
-            detection_timeout: Max time to wait for all detectors (seconds)
+            detection_timeout_value: Shared multiprocessing.Value for detection timeout (seconds)
             led_stabilization_delay: Time to wait after turning LED on (seconds)
         """
         super().__init__()
@@ -57,7 +57,7 @@ class UnifiedCoordinator(Process):
         self.led_start = led_start
         self.led_end = led_end
         self.check_movement = check_movement
-        self.detection_timeout = detection_timeout
+        self._detection_timeout_value = detection_timeout_value
         self.led_stabilization_delay = led_stabilization_delay
 
         # Communication queues
@@ -87,6 +87,13 @@ class UnifiedCoordinator(Process):
         self.detector_failure_counts: Dict[int, int] = {i: 0 for i in range(num_detectors)}
         self._backend_supports_universe = False
         self._backend_supports_universe_set_leds = False
+
+    @property
+    def detection_timeout(self) -> float:
+        """Get the current detection timeout from the shared value."""
+        if self._detection_timeout_value is not None:
+            return self._detection_timeout_value.value
+        return 1.5  # Default fallback
 
     def get_command_queue(self, detector_id: int) -> Queue:
         """Get the command queue for a specific detector."""

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QSpinBox,
+    QDoubleSpinBox,
     QSlider,
     QComboBox,
 )
@@ -27,6 +28,7 @@ class ControlPanel(QWidget):
     exposure_dark_requested = pyqtSignal()  # Set camera to dark mode
     exposure_bright_requested = pyqtSignal()  # Set camera to bright mode
     threshold_changed = pyqtSignal(int)  # New threshold value (0-255)
+    detection_timeout_changed = pyqtSignal(float)  # Detection timeout in seconds
     all_off_requested = pyqtSignal()  # Turn all LEDs off
     all_on_requested = pyqtSignal()  # Turn all LEDs on
     apply_config_requested = pyqtSignal()  # Apply AXIS camera config from file
@@ -132,6 +134,27 @@ class ControlPanel(QWidget):
         threshold_layout.addWidget(self.threshold_value_label)
 
         camera_controls_layout.addLayout(threshold_layout)
+
+        # Detection timeout spinbox
+        timeout_label = QLabel("Detection Timeout (sec):")
+        camera_controls_layout.addWidget(timeout_label)
+
+        timeout_layout = QHBoxLayout()
+
+        self.timeout_spinbox = QDoubleSpinBox()
+        self.timeout_spinbox.setMinimum(0.1)
+        self.timeout_spinbox.setMaximum(10.0)
+        self.timeout_spinbox.setSingleStep(0.1)
+        self.timeout_spinbox.setDecimals(1)
+        self.timeout_spinbox.setValue(1.5)  # Default timeout
+        self.timeout_spinbox.setToolTip(
+            "Time to wait for LED detection before moving to next LED.\n"
+            "Increase if LEDs are being skipped, decrease for faster scanning."
+        )
+        self.timeout_spinbox.valueChanged.connect(self.on_detection_timeout_changed)
+        timeout_layout.addWidget(self.timeout_spinbox)
+
+        camera_controls_layout.addLayout(timeout_layout)
 
         camera_controls_group.setLayout(camera_controls_layout)
         layout.addWidget(camera_controls_group)
@@ -322,6 +345,14 @@ class ControlPanel(QWidget):
         """Handle threshold slider change."""
         self.threshold_value_label.setText(str(value))
         self.threshold_changed.emit(value)
+
+    def on_detection_timeout_changed(self, value: float):
+        """Handle detection timeout spinbox change."""
+        self.detection_timeout_changed.emit(value)
+
+    def set_detection_timeout(self, value: float):
+        """Set the detection timeout value (e.g., from loaded project)."""
+        self.timeout_spinbox.setValue(value)
 
     def on_all_off(self):
         """Handle All Off button click."""

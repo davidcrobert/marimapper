@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
         self.control_panel.exposure_dark_requested.connect(self.set_exposure_dark)
         self.control_panel.exposure_bright_requested.connect(self.set_exposure_bright)
         self.control_panel.threshold_changed.connect(self.set_threshold)
+        self.control_panel.detection_timeout_changed.connect(self.set_detection_timeout)
         self.control_panel.all_off_requested.connect(self.set_all_off)
         self.control_panel.all_on_requested.connect(self.set_all_on)
         self.control_panel.apply_config_requested.connect(self.apply_axis_config)
@@ -821,6 +822,10 @@ class MainWindow(QMainWindow):
         initial_threshold = self.scanner_args.threshold
         self.control_panel.threshold_slider.setValue(initial_threshold)
 
+        # Set detection timeout spinbox to match scanner's initial timeout
+        initial_timeout = scanner.get_detection_timeout()
+        self.control_panel.set_detection_timeout(initial_timeout)
+
         self.log_widget.log_success(f"Scanner initialized with {led_count} LEDs")
 
         # Create detector update queue and 3D queues
@@ -1091,6 +1096,20 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Threshold: {value}")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set threshold: {str(e)}")
+
+    @pyqtSlot(float)
+    def set_detection_timeout(self, value: float):
+        """Set detection timeout (time to wait for LED detection before skipping)."""
+        if self.scanner is None:
+            self.log_widget.log_error("Scanner not initialized")
+            return
+
+        try:
+            self.scanner.set_detection_timeout(value)
+            self.log_widget.log_info(f"Detection timeout set to {value:.1f} seconds")
+            self.statusBar().showMessage(f"Detection timeout: {value:.1f}s")
+        except Exception as e:
+            self.log_widget.log_error(f"Failed to set detection timeout: {str(e)}")
 
     @pyqtSlot(int)
     def on_led_count_changed(self, value: int):

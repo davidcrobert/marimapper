@@ -1445,9 +1445,99 @@ class MainWindow(QMainWindow):
         """
         Handle scan failure.
 
+        For darkness check failures (LED visible when all should be off),
+        shows a dialog allowing the user to fix the issue and resume.
+
         Args:
             error_msg: Error message describing the failure
         """
+        # Check if this is a darkness check failure (false positive)
+        is_darkness_failure = (
+            "darkness check" in error_msg.lower()
+            or "led visible" in error_msg.lower()
+            or "when all should be off" in error_msg.lower()
+        )
+
+        if is_darkness_failure and self.is_scanning_universes:
+            # Show dialog for darkness check failure - user can fix and resume
+            self._show_darkness_failure_dialog(error_msg)
+        else:
+            # Other failures - just report and stop
+            self._handle_scan_failure(error_msg)
+
+    def _show_darkness_failure_dialog(self, error_msg: str):
+        """
+        Show a dialog when an LED is visible during darkness check.
+
+        The dialog pauses the scan and gives the user options to:
+        - Fix the issue and resume the scan
+        - Exit the scan
+
+        Args:
+            error_msg: Error message describing the failure
+        """
+        self.log_widget.log_warning(f"Darkness check failed: {error_msg}")
+        self.statusBar().showMessage("Scan paused - LED visible when should be off")
+
+        # Create dialog
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("LED Visible - Scan Paused")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText("An LED is visible when all LEDs should be off.")
+        dialog.setInformativeText(
+            f"{error_msg}\n\n"
+            "This could be caused by:\n"
+            "- An LED stuck on\n"
+            "- A reflection or bright spot in the camera's view\n"
+            "- Detection threshold set too low\n\n"
+            "Fix the issue and click 'Resume Scan' to continue, "
+            "or click 'Exit Scan' to stop."
+        )
+
+        # Add custom buttons
+        resume_button = dialog.addButton(
+            "Visible LED turned off, resume scan", QMessageBox.ButtonRole.AcceptRole
+        )
+        exit_button = dialog.addButton(
+            "Exit scan", QMessageBox.ButtonRole.RejectRole
+        )
+
+        # Show dialog (blocking)
+        dialog.exec()
+
+        # Handle response
+        clicked_button = dialog.clickedButton()
+        if clicked_button == resume_button:
+            self._resume_scan_after_darkness_failure()
+        else:
+            # User chose to exit
+            self._handle_scan_failure(error_msg)
+
+    def _resume_scan_after_darkness_failure(self):
+        """
+        Resume the scan after user indicates the darkness issue is fixed.
+
+        This re-requests the scan for the current universe, which will
+        re-run the darkness check before proceeding.
+        """
+        self.log_widget.log_info("Resuming scan after darkness check fix...")
+        self.statusBar().showMessage("Resuming scan...")
+
+        # Re-run the current universe scan (darkness check will run again)
+        # current_universe_index hasn't been incremented since the scan failed
+        self._scan_next_universe()
+
+    def _handle_scan_failure(self, error_msg: str):
+        """
+        Handle a scan failure by updating UI state.
+
+        Args:
+            error_msg: Error message describing the failure
+        """
+        # Reset universe scanning state on failure
+        self.is_scanning_universes = False
+        self.current_universe_index = 0
+
         self.control_panel.scan_failed(error_msg)
         self.statusBar().showMessage("Scan failed")
         # Reset progress bar on failure

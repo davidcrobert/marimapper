@@ -1864,15 +1864,16 @@ class MainWindow(QMainWindow):
             )
 
     def auto_load_3d_data(self):
-        """Auto-load existing 3D LED data on startup."""
-        # Use project reconstruction folder if active, otherwise output_dir
-        if self.project_manager.is_project_active():
-            reconstruction_dir = self.project_manager.get_reconstruction_dir()
-            led_map_3d_path = reconstruction_dir / "led_map_3d.csv"
-            transformed_path = reconstruction_dir / "transformed_led_map_3d.csv"
-        else:
-            led_map_3d_path = Path(self.scanner_args.output_dir) / "led_map_3d.csv"
-            transformed_path = Path(self.scanner_args.output_dir) / "transformed_led_map_3d.csv"
+        """Auto-load existing 3D LED data when a project is active."""
+        # Only load 3D data when a project is active
+        # This prevents showing arbitrary old data when no project is loaded
+        if not self.project_manager.is_project_active():
+            self.log_widget.log_info("No project loaded - 3D view will be empty until a project is opened or scan is started")
+            return
+
+        reconstruction_dir = self.project_manager.get_reconstruction_dir()
+        led_map_3d_path = reconstruction_dir / "led_map_3d.csv"
+        transformed_path = reconstruction_dir / "transformed_led_map_3d.csv"
 
         load_path = None
         # Prefer base map; fall back to transformed only if base missing
@@ -1882,7 +1883,7 @@ class MainWindow(QMainWindow):
             load_path = transformed_path
 
         if load_path is None:
-            self.log_widget.log_info("No existing 3D data found")
+            self.log_widget.log_info("Project has no existing 3D data")
             return
 
         try:

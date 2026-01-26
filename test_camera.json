@@ -1,0 +1,14 @@
+[
+  {
+    "name": "USB Camera (OpenCV Control)",
+    "video": {
+      "type": "device",
+      "device": "HP True Vision FHD Camera",
+      "width": 1280,
+      "height": 720
+    },
+    "control": {
+      "type": "opencv"
+    }
+  }
+]

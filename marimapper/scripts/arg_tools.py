@@ -95,6 +95,14 @@ def add_camera_args(parser):
         help="Camera exposure, the lower the value, the darker the image",
         default=-10,
     )
+
+    camera_options.add_argument(
+        "--resolution",
+        type=str,
+        help="USB camera resolution in WIDTHxHEIGHT format (e.g., '1280x720', '640x480'). "
+             "Default: 640x360. Only applies to USB cameras, not AXIS cameras.",
+        default="640x360",
+    )
     camera_options.add_argument(
         "--threshold",
         type=int,
@@ -103,6 +111,32 @@ def add_camera_args(parser):
         help="LED detection threshold, increasing this number will reduce false positive detections",
         default=128,
     )
+
+
+def parse_resolution(resolution_str: str) -> tuple:
+    """
+    Parse resolution string (e.g., '1280x720') into (width, height) tuple.
+
+    Args:
+        resolution_str: Resolution in WIDTHxHEIGHT format
+
+    Returns:
+        Tuple of (width, height) as integers
+
+    Raises:
+        ValueError: If format is invalid
+    """
+    try:
+        parts = resolution_str.lower().split('x')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid resolution format: {resolution_str}")
+        width = int(parts[0].strip())
+        height = int(parts[1].strip())
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Resolution must be positive: {resolution_str}")
+        return (width, height)
+    except (ValueError, AttributeError) as e:
+        raise ValueError(f"Invalid resolution '{resolution_str}'. Expected format: WIDTHxHEIGHT (e.g., '1280x720')") from e
 
 
 def add_common_args(parser) -> None:

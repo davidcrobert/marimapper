@@ -357,19 +357,23 @@ class DetectorWorkerProcess(Process):
 
                 elif msg_type == "SET_DARK":
                     # Set camera to dark exposure mode
+                    # msg[1] is the exposure level (0-1), if provided
                     try:
-                        set_cam_dark(cam, self.dark_exposure)
+                        dark_level = msg[1] if len(msg) > 1 else 1.0
+                        cam.set_dark_mode_level(dark_level)
                         cam.eat()  # Flush buffered frames
-                        logger.info(f"Camera {self.camera_id}: Set to DARK mode")
+                        logger.info(f"Camera {self.camera_id}: Set to DARK mode (level={dark_level:.2f})")
                     except Exception as e:
                         logger.warning(f"Camera {self.camera_id}: Failed to set dark mode: {e}")
 
                 elif msg_type == "SET_BRIGHT":
                     # Set camera to bright/default exposure mode
+                    # msg[1] is the exposure level (0-1), if provided
                     try:
-                        set_cam_default(cam)
+                        bright_level = msg[1] if len(msg) > 1 else 1.0
+                        cam.set_bright_mode_level(bright_level)
                         cam.eat()  # Flush buffered frames
-                        logger.info(f"Camera {self.camera_id}: Set to BRIGHT mode")
+                        logger.info(f"Camera {self.camera_id}: Set to BRIGHT mode (level={bright_level:.2f})")
                     except Exception as e:
                         logger.warning(f"Camera {self.camera_id}: Failed to set bright mode: {e}")
 

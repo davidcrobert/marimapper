@@ -45,9 +45,9 @@ class VideoSource(ABC):
 class FFmpegVideoSource(VideoSource):
     """Video capture via FFmpeg subprocess (for USB cameras)."""
 
-    def __init__(self, device_identifier: str):
+    def __init__(self, device_identifier: str, width: int = 640, height: int = 360):
         from .ffmpeg_capture import FFmpegCapture
-        self._capture = FFmpegCapture(device_identifier)
+        self._capture = FFmpegCapture(device_identifier, width=width, height=height)
         self._device_identifier = device_identifier
 
     def start(self) -> None:

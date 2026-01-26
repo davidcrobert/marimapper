@@ -29,6 +29,7 @@ from marimapper.scripts.arg_tools import (
     add_camera_args,
     add_scanner_args,
     add_all_backend_parsers,
+    parse_resolution,
 )
 from marimapper.backends.backend_utils import backend_factories
 from marimapper.gui.main_window import MainWindow
@@ -144,13 +145,18 @@ def main():
         device_names = [d.strip() for d in args.devices.split(',') if d.strip()]
         if len(device_names) == 0:
             raise Exception("--devices must contain at least one device name")
-        camera_configs = [{"device": d} for d in device_names]
+        # Parse resolution for USB cameras
+        width, height = parse_resolution(args.resolution)
+        camera_configs = [{"device": d, "width": width, "height": height} for d in device_names]
 
     # Validate camera count
     if parsed_camera_configs is not None and len(parsed_camera_configs) > 9:
         raise Exception(f"GUI supports maximum 9 cameras (you provided {len(parsed_camera_configs)})")
     elif camera_configs is not None and len(camera_configs) > 9:
         raise Exception(f"GUI supports maximum 9 cameras (you provided {len(camera_configs)})")
+
+    # Parse resolution for USB cameras
+    resolution = parse_resolution(args.resolution)
 
     # Create scanner args object that MainWindow expects
     class ScannerArgs:
@@ -173,6 +179,8 @@ def main():
             self.camera_configs = parsed_camera_configs
             # Extract base_universe from backend args (defaults to 0 if not present)
             self.base_universe = getattr(args, 'base_universe', 0)
+            # USB camera resolution
+            self.resolution = resolution
 
     scanner_args = ScannerArgs()
 

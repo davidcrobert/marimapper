@@ -127,6 +127,32 @@ class Camera:
         """Reset camera to default settings."""
         self._settings_controller.set_bright_mode()
 
+    def set_dark_mode_level(self, level: float) -> bool:
+        """
+        Set camera to dark mode with specified intensity level.
+
+        Args:
+            level: Darkness level (0-1), where 0 is minimal darkening
+                   and 1 is maximum darkening
+
+        Returns:
+            True if successful, False otherwise
+        """
+        return self._settings_controller.set_dark_mode_level(level)
+
+    def set_bright_mode_level(self, level: float) -> bool:
+        """
+        Set camera to bright mode with specified intensity level.
+
+        Args:
+            level: Brightness level (0-1), where 0 is dim
+                   and 1 is maximum brightness
+
+        Returns:
+            True if successful, False otherwise
+        """
+        return self._settings_controller.set_bright_mode_level(level)
+
     def set_exposure(self, exposure: int) -> bool:
         """
         Set camera exposure value.

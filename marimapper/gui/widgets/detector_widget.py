@@ -6,8 +6,8 @@ Displays the live camera feed from the detector process with LED detections.
 
 import numpy as np
 from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QPushButton
-from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal, QPoint
-from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QImage
+from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal, QPoint, QEvent
+from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QImage, QFont
 import cv2
 from time import monotonic
 
@@ -38,6 +38,10 @@ class DetectorWidget(QWidget):
         self.detection_point = None  # Normalized (u, v) of last detection
         self.detection_expire_time = 0.0  # monotonic timestamp for marker expiry
 
+        # Resolution overlay state
+        self.frame_resolution = None  # (width, height) of current frame
+        self.is_hovered = False  # Mouse is over the video feed
+
         self.init_ui()
 
     def init_ui(self):
@@ -54,9 +58,11 @@ class DetectorWidget(QWidget):
         self.video_label.setStyleSheet(
             "QLabel { background-color: black; color: white; font-size: 14px; }"
         )
-        # Enable mouse tracking for double-click
+        # Enable mouse tracking for double-click and hover detection
         self.video_label.setMouseTracking(True)
         self.video_label.mouseDoubleClickEvent = self._on_double_click
+        self.video_label.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.video_label.installEventFilter(self)
 
         # Maximize/Minimize button
         # Use a simple text icon to avoid font/encoding surprises across platforms
@@ -98,6 +104,9 @@ class DetectorWidget(QWidget):
         if frame is None or frame.size == 0:
             return
 
+        # Store frame resolution (height, width from numpy shape)
+        self.frame_resolution = (frame.shape[1], frame.shape[0])
+
         # Convert numpy array to QPixmap
         self.base_frame = numpy_to_qpixmap(frame)
 
@@ -136,6 +145,10 @@ class DetectorWidget(QWidget):
             else:
                 self._draw_detection_marker(result, self.detection_point)
 
+        # Draw resolution overlay when hovered
+        if self.is_hovered and self.frame_resolution is not None:
+            self._draw_resolution_overlay(result)
+
         self.video_label.setPixmap(result)
 
     def resizeEvent(self, event):
@@ -172,6 +185,56 @@ class DetectorWidget(QWidget):
     def _on_double_click(self, event):
         """Handle double-click on video to toggle maximize."""
         self._toggle_maximize()
+
+    def eventFilter(self, obj, event):
+        """Handle hover events on the video label."""
+        if obj == self.video_label:
+            if event.type() == QEvent.Type.Enter:
+                self.is_hovered = True
+                self._render_current_frame()
+            elif event.type() == QEvent.Type.Leave:
+                self.is_hovered = False
+                self._render_current_frame()
+        return super().eventFilter(obj, event)
+
+    def _draw_resolution_overlay(self, pixmap: QPixmap):
+        """Draw resolution annotation in the bottom-left corner."""
+        if self.frame_resolution is None:
+            return
+
+        width, height = self.frame_resolution
+        resolution_text = f"{width} x {height}"
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Set up font
+        font = QFont("Monospace", 10)
+        font.setBold(True)
+        painter.setFont(font)
+
+        # Calculate text dimensions
+        font_metrics = painter.fontMetrics()
+        text_width = font_metrics.horizontalAdvance(resolution_text)
+        text_height = font_metrics.height()
+
+        # Position in bottom-left with padding
+        padding = 6
+        margin = 8
+        x = margin
+        y = pixmap.height() - margin - text_height - padding
+
+        # Draw semi-transparent background
+        bg_rect = (x - padding, y - padding // 2, text_width + padding * 2, text_height + padding)
+        painter.setBrush(QColor(0, 0, 0, 160))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(*bg_rect, 4, 4)
+
+        # Draw text
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(x, y + text_height - font_metrics.descent(), resolution_text)
+
+        painter.end()
 
     def _draw_detection_marker(self, pixmap: QPixmap, detection_point: tuple[float, float]):
         """Overlay a crosshair at the detected LED location."""

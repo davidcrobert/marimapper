@@ -31,9 +31,44 @@ class SettingsController(ABC):
         """Capture current settings as defaults (if supported)."""
         pass
 
+    def set_dark_mode_level(self, level: float) -> bool:
+        """
+        Set camera to dark mode with specified intensity level.
+
+        Args:
+            level: Darkness level (0-1), where 0 is minimal darkening
+                   and 1 is maximum darkening
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Default implementation maps level to exposure value
+        # Subclasses should override for better control
+        exposure = int(-13 * level)  # 0 -> 0, 1 -> -13
+        return self.set_dark_mode(exposure)
+
+    def set_bright_mode_level(self, level: float) -> bool:
+        """
+        Set camera to bright mode with specified intensity level.
+
+        Args:
+            level: Brightness level (0-1), where 0 is dim
+                   and 1 is maximum brightness
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Default implementation just uses bright mode
+        # Subclasses should override for better control
+        return self.set_bright_mode()
+
 
 class OpenCVSettingsController(SettingsController):
     """Controls settings via OpenCV (for USB cameras)."""
+
+    # OpenCV exposure range (hardware-specific, but typically -13 to 0 for most cameras)
+    DARK_EXPOSURE_MIN = 0  # Slider 0 -> exposure 0 (minimal darkening)
+    DARK_EXPOSURE_MAX = -13  # Slider 1 -> exposure -13 (maximum darkening)
 
     def __init__(self, device_identifier: str):
         from .exposure_control import ExposureController
@@ -47,6 +82,46 @@ class OpenCVSettingsController(SettingsController):
 
     def capture_defaults(self) -> bool:
         return self._controller.capture_default_settings()
+
+    def set_dark_mode_level(self, level: float) -> bool:
+        """
+        Set dark mode with level 0-1.
+
+        Maps level to OpenCV exposure value:
+        - level 0 -> exposure 0 (minimal darkening)
+        - level 1 -> exposure -13 (maximum darkening)
+        """
+        level = max(0.0, min(1.0, level))  # Clamp to 0-1
+        exposure = int(self.DARK_EXPOSURE_MIN + level * (self.DARK_EXPOSURE_MAX - self.DARK_EXPOSURE_MIN))
+        logger.debug(f"OpenCV dark mode: level {level:.2f} -> exposure {exposure}")
+        return self._controller.set_dark_mode(exposure)
+
+    def set_bright_mode_level(self, level: float) -> bool:
+        """
+        Set bright mode with level 0-1.
+
+        For OpenCV cameras, we restore defaults for bright mode.
+        The level parameter adjusts exposure after restoring defaults.
+        - level 0 -> dimmer (exposure closer to -13)
+        - level 1 -> brighter (auto exposure restored)
+        """
+        level = max(0.0, min(1.0, level))  # Clamp to 0-1
+
+        if level >= 0.9:
+            # Full brightness: restore auto exposure
+            logger.debug(f"OpenCV bright mode: level {level:.2f} -> auto exposure")
+            return self._controller.set_bright_mode()
+        else:
+            # Partial brightness: manual exposure
+            # Map level 0-0.9 to exposure -13 to 0
+            exposure = int(-13 + level / 0.9 * 13)
+            logger.debug(f"OpenCV bright mode: level {level:.2f} -> exposure {exposure}")
+            return self._controller.apply_settings(
+                autofocus=1,
+                exposure_mode=0,  # Manual
+                gain=0,
+                exposure=exposure
+            )
 
 
 class VAPIXSettingsController(SettingsController):
@@ -81,6 +156,32 @@ class VAPIXSettingsController(SettingsController):
         """Close iris for dark mode."""
         logger.debug(f"Setting VAPIX camera to dark mode (exposure={exposure})")
         return self._set_iris(100)  # 100 = fully closed/dark
+
+    def set_dark_mode_level(self, level: float) -> bool:
+        """
+        Set dark mode with level 0-1.
+
+        Maps level to VAPIX iris position:
+        - level 0 -> iris 0 (fully open, minimal darkening)
+        - level 1 -> iris 100 (fully closed, maximum darkening)
+        """
+        level = max(0.0, min(1.0, level))  # Clamp to 0-1
+        iris_position = int(level * 100)
+        logger.debug(f"VAPIX dark mode: level {level:.2f} -> iris {iris_position}")
+        return self._set_iris(iris_position)
+
+    def set_bright_mode_level(self, level: float) -> bool:
+        """
+        Set bright mode with level 0-1.
+
+        Maps level to VAPIX iris position:
+        - level 0 -> iris 100 (fully closed, dim)
+        - level 1 -> iris 0 (fully open, maximum brightness)
+        """
+        level = max(0.0, min(1.0, level))  # Clamp to 0-1
+        iris_position = int((1.0 - level) * 100)  # Invert: 1=open, 0=closed
+        logger.debug(f"VAPIX bright mode: level {level:.2f} -> iris {iris_position}")
+        return self._set_iris(iris_position)
 
     def set_bright_mode(self) -> bool:
         """Restore saved settings or use defaults."""
@@ -335,4 +436,12 @@ class NoOpSettingsController(SettingsController):
 
     def capture_defaults(self) -> bool:
         logger.debug("NoOp settings controller: capture defaults (no action)")
+        return True
+
+    def set_dark_mode_level(self, level: float) -> bool:
+        logger.debug(f"NoOp settings controller: dark mode level {level:.2f} (no action)")
+        return True
+
+    def set_bright_mode_level(self, level: float) -> bool:
+        logger.debug(f"NoOp settings controller: bright mode level {level:.2f} (no action)")
         return True

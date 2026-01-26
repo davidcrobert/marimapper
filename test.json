@@ -1,0 +1,15 @@
+[
+  {
+    "name": "Cam5",
+    "video": {
+      "type": "device",
+      "device": "Cam5"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.100.252",
+      "username": "root",
+      "password": "hemmer"
+    }
+  }
+]

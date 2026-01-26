@@ -71,6 +71,7 @@ class Scanner:
         axis_configs: Optional[List[dict]] = None,
         camera_configs: Optional[List] = None,  # List[CameraConfig] from camera_config.py
         frame_queue=None,
+        resolution: tuple = (640, 360),  # (width, height) for USB cameras
     ):
         """
         Initialize Scanner with unified architecture.
@@ -109,7 +110,7 @@ class Scanner:
             self.camera_configs = [axis_config]
         else:
             # USB camera (single)
-            self.camera_configs = [{"device": device}]
+            self.camera_configs = [{"device": device, "width": resolution[0], "height": resolution[1]}]
 
         self.num_cameras = len(self.camera_configs)
         logger.info(f"Initializing scanner with {self.num_cameras} camera(s)")

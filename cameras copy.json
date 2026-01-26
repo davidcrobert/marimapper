@@ -1,52 +1,78 @@
 [
   {
-    "name": "TestCam1",
+    "name": "Cam1",
     "video": {
       "type": "device",
-      "device": "TestCam1"
+      "device": "Cam1"
     },
     "control": {
       "type": "vapix",
-      "host": "192.170.90.199",
+      "host": "192.170.100.232",
       "username": "root",
       "password": "hemmer"
     }
   },
   {
-    "name": "TestCam2",
+    "name": "Cam2",
     "video": {
       "type": "device",
-      "device": "TestCam2"
+      "device": "Cam2"
     },
     "control": {
       "type": "vapix",
-      "host": "192.170.90.198",
+      "host": "192.170.100.213",
       "username": "root",
       "password": "hemmer"
     }
   },
   {
-    "name": "TestCam3",
+    "name": "Cam3",
     "video": {
       "type": "device",
-      "device": "TestCam3"
+      "device": "Cam3"
     },
     "control": {
       "type": "vapix",
-      "host": "192.170.90.115",
+      "host": "192.170.100.253",
       "username": "root",
       "password": "hemmer"
     }
   },
   {
-    "name": "TestCam4",
+    "name": "Cam4",
     "video": {
       "type": "device",
-      "device": "TestCam4"
+      "device": "Cam4"
     },
     "control": {
       "type": "vapix",
-      "host": "192.170.90.104",
+      "host": "192.170.100.214",
+      "username": "root",
+      "password": "hemmer"
+    }
+  },
+  {
+    "name": "Cam5",
+    "video": {
+      "type": "device",
+      "device": "Cam5"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.100.252",
+      "username": "root",
+      "password": "hemmer"
+    }
+  },
+  {
+    "name": "Cam6",
+    "video": {
+      "type": "device",
+      "device": "Cam6"
+    },
+    "control": {
+      "type": "vapix",
+      "host": "192.170.100.242",
       "username": "root",
       "password": "hemmer"
     }

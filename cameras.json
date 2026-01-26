@@ -3,7 +3,9 @@
     "name": "Cam1",
     "video": {
       "type": "device",
-      "device": "Cam1"
+      "device": "Cam1",
+      "width": 1280,
+      "height": 720
     },
     "control": {
       "type": "vapix",
@@ -13,23 +15,12 @@
     }
   },
   {
-    "name": "Cam2",
-    "video": {
-      "type": "device",
-      "device": "Cam2"
-    },
-    "control": {
-      "type": "vapix",
-      "host": "192.170.100.213",
-      "username": "root",
-      "password": "hemmer"
-    }
-  },
-  {
     "name": "Cam3",
     "video": {
       "type": "device",
-      "device": "Cam3"
+      "device": "Cam3",
+      "width": 1280,
+      "height": 720
     },
     "control": {
       "type": "vapix",
@@ -39,23 +30,12 @@
     }
   },
   {
-    "name": "Cam4",
-    "video": {
-      "type": "device",
-      "device": "Cam4"
-    },
-    "control": {
-      "type": "vapix",
-      "host": "192.170.100.214",
-      "username": "root",
-      "password": "hemmer"
-    }
-  },
-  {
     "name": "Cam6",
     "video": {
       "type": "device",
-      "device": "Cam6"
+      "device": "Cam6",
+      "width": 1280,
+      "height": 720
     },
     "control": {
       "type": "vapix",

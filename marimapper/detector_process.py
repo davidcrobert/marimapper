@@ -467,12 +467,16 @@ class DetectorProcess(Process):
                             value = None
 
                         if command == CameraCommand.SET_DARK:
-                            logger.info("GUI requested: Setting camera to DARK mode")
-                            set_cam_dark(cam, self._dark_exposure)
+                            # value is the exposure level (0-1), default to 1.0 if not provided
+                            dark_level = value if value is not None else 1.0
+                            logger.info(f"GUI requested: Setting camera to DARK mode (level={dark_level:.2f})")
+                            cam.set_dark_mode_level(dark_level)
                             cam.eat()  # Flush frames
                         elif command == CameraCommand.SET_BRIGHT:
-                            logger.info("GUI requested: Setting camera to BRIGHT mode")
-                            set_cam_default(cam)
+                            # value is the exposure level (0-1), default to 1.0 if not provided
+                            bright_level = value if value is not None else 1.0
+                            logger.info(f"GUI requested: Setting camera to BRIGHT mode (level={bright_level:.2f})")
+                            cam.set_bright_mode_level(bright_level)
                             cam.eat()  # Flush frames
                         elif command == CameraCommand.SET_THRESHOLD:
                             if value is not None:

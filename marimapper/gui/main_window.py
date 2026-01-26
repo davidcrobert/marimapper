@@ -78,6 +78,7 @@ class ScannerInitThread(QThread):
                 axis_configs=self.scanner_args.axis_configs,
                 camera_configs=getattr(self.scanner_args, 'camera_configs', None),
                 frame_queue=self.frame_queue,
+                resolution=getattr(self.scanner_args, 'resolution', (640, 360)),
             )
 
             print("ScannerInitThread: Scanner created successfully!", file=sys.stderr, flush=True)
@@ -317,6 +318,8 @@ class MainWindow(QMainWindow):
         self.control_panel.stop_scan_requested.connect(self.stop_scan)
         self.control_panel.exposure_dark_requested.connect(self.set_exposure_dark)
         self.control_panel.exposure_bright_requested.connect(self.set_exposure_bright)
+        self.control_panel.dark_exposure_changed.connect(self.set_dark_exposure_level)
+        self.control_panel.bright_exposure_changed.connect(self.set_bright_exposure_level)
         self.control_panel.threshold_changed.connect(self.set_threshold)
         self.control_panel.detection_timeout_changed.connect(self.set_detection_timeout)
         self.control_panel.all_off_requested.connect(self.set_all_off)
@@ -1045,15 +1048,18 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # Get the current dark exposure level from the slider
+            dark_level = self.control_panel.get_dark_exposure()
+
             # Broadcast to all detectors (works for any number of cameras)
             for i in range(self.camera_count):
                 detector_queue = self.scanner.get_detector_command_queue(i)
                 if detector_queue is not None:
-                    detector_queue.put(("SET_DARK",))
+                    detector_queue.put(("SET_DARK", dark_level))
 
             cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
-            self.log_widget.log_info(f"All {cameras_msg} set to DARK mode")
-            self.statusBar().showMessage("Camera: Dark mode")
+            self.log_widget.log_info(f"All {cameras_msg} set to DARK mode (level={dark_level:.2f})")
+            self.statusBar().showMessage(f"Camera: Dark mode ({dark_level:.2f})")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set dark mode: {str(e)}")
 
@@ -1065,17 +1071,32 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # Get the current bright exposure level from the slider
+            bright_level = self.control_panel.get_bright_exposure()
+
             # Broadcast to all detectors (works for any number of cameras)
             for i in range(self.camera_count):
                 detector_queue = self.scanner.get_detector_command_queue(i)
                 if detector_queue is not None:
-                    detector_queue.put(("SET_BRIGHT",))
+                    detector_queue.put(("SET_BRIGHT", bright_level))
 
             cameras_msg = "camera" if self.camera_count == 1 else f"{self.camera_count} cameras"
-            self.log_widget.log_info(f"All {cameras_msg} set to BRIGHT mode")
-            self.statusBar().showMessage("Camera: Bright mode")
+            self.log_widget.log_info(f"All {cameras_msg} set to BRIGHT mode (level={bright_level:.2f})")
+            self.statusBar().showMessage(f"Camera: Bright mode ({bright_level:.2f})")
         except Exception as e:
             self.log_widget.log_error(f"Failed to set bright mode: {str(e)}")
+
+    @pyqtSlot(float)
+    def set_dark_exposure_level(self, value: float):
+        """Update the dark exposure level setting (0-1)."""
+        # This just stores the preference; actual application happens when Dark Mode is clicked
+        self.log_widget.log_info(f"Dark exposure level set to {value:.2f}")
+
+    @pyqtSlot(float)
+    def set_bright_exposure_level(self, value: float):
+        """Update the bright exposure level setting (0-1)."""
+        # This just stores the preference; actual application happens when Bright Mode is clicked
+        self.log_widget.log_info(f"Bright exposure level set to {value:.2f}")
 
     @pyqtSlot(int)
     def set_threshold(self, value: int):

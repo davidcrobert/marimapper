@@ -27,6 +27,8 @@ class ControlPanel(QWidget):
     stop_scan_requested = pyqtSignal()
     exposure_dark_requested = pyqtSignal()  # Set camera to dark mode
     exposure_bright_requested = pyqtSignal()  # Set camera to bright mode
+    dark_exposure_changed = pyqtSignal(float)  # Dark exposure level (0-1)
+    bright_exposure_changed = pyqtSignal(float)  # Bright exposure level (0-1)
     threshold_changed = pyqtSignal(int)  # New threshold value (0-255)
     detection_timeout_changed = pyqtSignal(float)  # Detection timeout in seconds
     all_off_requested = pyqtSignal()  # Turn all LEDs off
@@ -89,6 +91,56 @@ class ControlPanel(QWidget):
         exposure_layout.addWidget(self.bright_button)
 
         camera_controls_layout.addLayout(exposure_layout)
+
+        # Dark exposure slider (0-1)
+        dark_exposure_label = QLabel("Dark Exposure:")
+        camera_controls_layout.addWidget(dark_exposure_label)
+
+        dark_exp_layout = QHBoxLayout()
+        self.dark_exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        self.dark_exposure_slider.setMinimum(0)
+        self.dark_exposure_slider.setMaximum(100)
+        self.dark_exposure_slider.setValue(100)  # Default to maximum darkness
+        self.dark_exposure_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.dark_exposure_slider.setTickInterval(10)
+        self.dark_exposure_slider.setToolTip(
+            "Controls how dark 'Dark Mode' is.\n"
+            "0 = minimal darkening, 1 = maximum darkening"
+        )
+        self.dark_exposure_slider.valueChanged.connect(self.on_dark_exposure_changed)
+        dark_exp_layout.addWidget(self.dark_exposure_slider)
+
+        self.dark_exposure_value_label = QLabel("1.00")
+        self.dark_exposure_value_label.setMinimumWidth(35)
+        self.dark_exposure_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        dark_exp_layout.addWidget(self.dark_exposure_value_label)
+
+        camera_controls_layout.addLayout(dark_exp_layout)
+
+        # Bright exposure slider (0-1)
+        bright_exposure_label = QLabel("Bright Exposure:")
+        camera_controls_layout.addWidget(bright_exposure_label)
+
+        bright_exp_layout = QHBoxLayout()
+        self.bright_exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        self.bright_exposure_slider.setMinimum(0)
+        self.bright_exposure_slider.setMaximum(100)
+        self.bright_exposure_slider.setValue(100)  # Default to maximum brightness
+        self.bright_exposure_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.bright_exposure_slider.setTickInterval(10)
+        self.bright_exposure_slider.setToolTip(
+            "Controls how bright 'Bright Mode' is.\n"
+            "0 = dim preview, 1 = maximum brightness"
+        )
+        self.bright_exposure_slider.valueChanged.connect(self.on_bright_exposure_changed)
+        bright_exp_layout.addWidget(self.bright_exposure_slider)
+
+        self.bright_exposure_value_label = QLabel("1.00")
+        self.bright_exposure_value_label.setMinimumWidth(35)
+        self.bright_exposure_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        bright_exp_layout.addWidget(self.bright_exposure_value_label)
+
+        camera_controls_layout.addLayout(bright_exp_layout)
 
         # Global LED controls
         led_power_layout = QHBoxLayout()
@@ -340,6 +392,34 @@ class ControlPanel(QWidget):
         """Handle bright mode button click."""
         self.exposure_status_label.setText("Mode: Bright (Normal)")
         self.exposure_bright_requested.emit()
+
+    def on_dark_exposure_changed(self, value: int):
+        """Handle dark exposure slider change."""
+        float_value = value / 100.0
+        self.dark_exposure_value_label.setText(f"{float_value:.2f}")
+        self.dark_exposure_changed.emit(float_value)
+
+    def on_bright_exposure_changed(self, value: int):
+        """Handle bright exposure slider change."""
+        float_value = value / 100.0
+        self.bright_exposure_value_label.setText(f"{float_value:.2f}")
+        self.bright_exposure_changed.emit(float_value)
+
+    def get_dark_exposure(self) -> float:
+        """Get the current dark exposure value (0-1)."""
+        return self.dark_exposure_slider.value() / 100.0
+
+    def get_bright_exposure(self) -> float:
+        """Get the current bright exposure value (0-1)."""
+        return self.bright_exposure_slider.value() / 100.0
+
+    def set_dark_exposure(self, value: float):
+        """Set the dark exposure slider value (0-1)."""
+        self.dark_exposure_slider.setValue(int(value * 100))
+
+    def set_bright_exposure(self, value: float):
+        """Set the bright exposure slider value (0-1)."""
+        self.bright_exposure_slider.setValue(int(value * 100))
 
     def on_threshold_changed(self, value: int):
         """Handle threshold slider change."""

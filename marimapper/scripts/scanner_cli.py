@@ -13,6 +13,7 @@ from marimapper.scripts.arg_tools import (
     add_camera_args,
     add_scanner_args,
     add_all_backend_parsers,
+    parse_resolution,
 )
 from marimapper.backends.backend_utils import backend_factories
 from marimapper.scanner import Scanner
@@ -131,8 +132,10 @@ def main():
         device_names = [d.strip() for d in args.devices.split(',') if d.strip()]
         if len(device_names) == 0:
             raise Exception("--devices must contain at least one device name")
-        camera_configs = [{"device": d} for d in device_names]
-        logger.info(f"Multi-camera mode: {len(camera_configs)} USB cameras configured from --devices")
+        # Parse resolution for USB cameras
+        width, height = parse_resolution(args.resolution)
+        camera_configs = [{"device": d, "width": width, "height": height} for d in device_names]
+        logger.info(f"Multi-camera mode: {len(camera_configs)} USB cameras configured from --devices at {width}x{height}")
 
     elif args.axis_host:
         # Single camera mode (existing behavior)
@@ -144,6 +147,9 @@ def main():
             'password': args.axis_password,
         }
         logger.info(f"Single camera mode: Axis camera at {args.axis_host}")
+
+    # Parse resolution for USB cameras
+    resolution = parse_resolution(args.resolution)
 
     # Create scanner with appropriate config
     scanner = Scanner(
@@ -161,6 +167,7 @@ def main():
         axis_config=axis_config,
         axis_configs=camera_configs,
         camera_configs=parsed_camera_configs,
+        resolution=resolution,
     )
 
     scanner.mainloop()

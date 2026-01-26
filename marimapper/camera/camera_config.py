@@ -155,7 +155,11 @@ def _create_video_source(cfg: Dict[str, Any], camera_name: str) -> VideoSource:
             device_identifier = camera_device.identifier
             logger.info(f"Resolved '{device}' to {camera_device.name}")
 
-        return FFmpegVideoSource(device_identifier)
+        # Get resolution from config (defaults to 640x360)
+        width = cfg.get("width", 640)
+        height = cfg.get("height", 360)
+
+        return FFmpegVideoSource(device_identifier, width=width, height=height)
 
     elif source_type == "axis_stream":
         host = cfg.get("host")
@@ -208,7 +212,7 @@ def convert_legacy_config(legacy_cfg: Dict[str, Any]) -> CameraConfig:
 
     Args:
         legacy_cfg: Either {"host": ..., "username": ..., "password": ...}
-                    or {"device": ...}
+                    or {"device": ..., "width": ..., "height": ...}
 
     Returns:
         CameraConfig instance
@@ -241,12 +245,16 @@ def convert_legacy_config(legacy_cfg: Dict[str, Any]) -> CameraConfig:
     elif "device" in legacy_cfg:
         # USB camera (legacy)
         device = legacy_cfg["device"]
+        width = legacy_cfg.get("width", 640)
+        height = legacy_cfg.get("height", 360)
 
         return CameraConfig(
             name=f"USB: {device}",
             video_config={
                 "type": "device",
-                "device": device
+                "device": device,
+                "width": width,
+                "height": height
             },
             control_config={
                 "type": "opencv"
